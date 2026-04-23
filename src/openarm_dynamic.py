@@ -33,7 +33,7 @@ def _input_quat_normalize_jacobian(q: npt.NDArray[np.float64]) -> npt.NDArray[np
     qn = quat_normalize(q)
     return np.eye(4, dtype=np.float64) - np.outer(qn, qn)
 
-def _normalize_jacobian(y: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]
+def _normalize_jacobian(y: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     n = float(np.linalg.norm(y))
     if n < 1e-12:
         return np.eye(4, dtype=np.float64)
