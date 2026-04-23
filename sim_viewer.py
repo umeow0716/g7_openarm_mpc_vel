@@ -1,13 +1,14 @@
-
+import os
 import time
 import atexit
+import signal
 import mujoco
 import mujoco.viewer
 import numpy as np
 
 from src.mpc_solver import OpenArmMPCSolver
 from plotter import plot_shared_memory_x_target_realtime
-from multiprocessing import Process, Event, shared_memory
+from multiprocessing import Process, shared_memory
 
 
 LEFT_EE_BODY = 'L_gripper_tcp_link'
@@ -149,7 +150,8 @@ def main():
     
     def onexit():
         process1.terminate()
-        process2.terminate()
+        os.kill(process2.pid, signal.SIGINT)
+        process2.join()
         x_shm.close()
         u_shm.close()
         left_pos_target_shm.close()
@@ -159,42 +161,45 @@ def main():
 
     atexit.register(onexit)
 
-    while True:
-        step_start = time.time()
+    try:
+        while True:
+            step_start = time.time()
 
-        if step_count % solve_every == 0:
-            left_pos = np.ndarray(LEFT_TARGET_POS_SHARED_SHAPE, dtype=DTYPE, buffer=left_pos_target_shm.buf)
-            left_quat = np.ndarray(LEFT_TARGET_QUAT_SHARED_SHAPE, dtype=DTYPE, buffer=left_quat_target_shm.buf)
-            right_pos = np.ndarray(RIGHT_TARGET_POS_SHARED_SHAPE, dtype=DTYPE, buffer=right_pos_target_shm.buf)
-            right_quat = np.ndarray(RIGHT_TARGET_QUAT_SHARED_SHAPE, dtype=DTYPE, buffer=right_quat_target_shm.buf)
+            if step_count % solve_every == 0:
+                left_pos = np.ndarray(LEFT_TARGET_POS_SHARED_SHAPE, dtype=DTYPE, buffer=left_pos_target_shm.buf)
+                left_quat = np.ndarray(LEFT_TARGET_QUAT_SHARED_SHAPE, dtype=DTYPE, buffer=left_quat_target_shm.buf)
+                right_pos = np.ndarray(RIGHT_TARGET_POS_SHARED_SHAPE, dtype=DTYPE, buffer=right_pos_target_shm.buf)
+                right_quat = np.ndarray(RIGHT_TARGET_QUAT_SHARED_SHAPE, dtype=DTYPE, buffer=right_quat_target_shm.buf)
 
-            target = np.concatenate([
-                left_pos, left_quat,
-                right_pos, right_quat
-            ]).astype(np.float64)
+                target = np.concatenate([
+                    left_pos, left_quat,
+                    right_pos, right_quat
+                ]).astype(np.float64)
 
-            x = np.ndarray(X_SHARED_SHAPE, dtype=DTYPE, buffer=x_shm.buf)
+                x = np.ndarray(X_SHARED_SHAPE, dtype=DTYPE, buffer=x_shm.buf)
 
-            _, U_sol, success = mpc.solve_slq(
-                x0=x,
-                target=target,
-                U_init=U_init,
-                max_iter=max_iter,
-                shift_warm_start=True,
-            )
-            U_init = U_sol.copy()
+                _, U_sol, success = mpc.solve_slq(
+                    x0=x,
+                    target=target,
+                    U_init=U_init,
+                    max_iter=max_iter,
+                    shift_warm_start=True,
+                )
+                U_init = U_sol.copy()
 
-            u_cmd = U_sol[0].copy()
-            if not success:
-                u_cmd[:] = 0.0
-            
-            step_end = time.time()
-            dt_solve = step_end - step_start
-            print(f'SLQ step spent {dt_solve:.6f}s ({1.0 / max(dt_solve, 1e-9):.2f} Hz)')
+                u_cmd = U_sol[0].copy()
+                if not success:
+                    u_cmd[:] = 0.0
+                
+                step_end = time.time()
+                dt_solve = step_end - step_start
+                print(f'SLQ step spent {dt_solve:.6f}s ({1.0 / max(dt_solve, 1e-9):.2f} Hz)')
 
-        u_shm.buf[:] = u_cmd.astype(DTYPE).tobytes() # type: ignore
+            u_shm.buf[:] = u_cmd.astype(DTYPE).tobytes() # type: ignore
 
-        step_count += 1
+            step_count += 1
+    except KeyboardInterrupt:
+        pass
 
 
 if __name__ == "__main__":

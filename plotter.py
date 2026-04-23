@@ -350,20 +350,12 @@ def plot_shared_memory_x_target_realtime(
             fig_err.canvas.draw_idle()
 
             plt.pause(poll_dt)
-
-    finally:
-        try:
-            if 'fig_pos' in locals():
-                fig_pos.savefig(position_png_path, dpi=150, bbox_inches='tight')
-            if 'fig_vel' in locals():
-                fig_vel.savefig(velocity_png_path, dpi=150, bbox_inches='tight')
-            if 'fig_err' in locals():
-                fig_err.savefig(error_png_path, dpi=150, bbox_inches='tight')
-        finally:
-            x_shm.close()
-            u_shm.close()
-            left_target_pos_shm.close()
-            left_target_quat_shm.close()
-            right_target_pos_shm.close()
-            right_target_quat_shm.close()
-            plt.ioff()
+    except KeyboardInterrupt:
+        print('saving figures and exiting...')
+        if 'fig_pos' in locals():
+            fig_pos.savefig(position_png_path, dpi=150, bbox_inches='tight')
+        if 'fig_vel' in locals():
+            fig_vel.savefig(velocity_png_path, dpi=150, bbox_inches='tight')
+        if 'fig_err' in locals():
+            fig_err.savefig(error_png_path, dpi=150, bbox_inches='tight')
+        plt.ioff()
