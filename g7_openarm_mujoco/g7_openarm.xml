@@ -1,0 +1,352 @@
+<mujoco model="g7_openarm">
+  <compiler angle="radian" meshdir="meshes" />
+  <default>
+    <default class="g7_openarm">
+      <geom friction="0.4" margin="0.001" condim="1" />
+      <joint damping="0.1" armature="0.01" frictionloss="0.2" />
+      <motor ctrlrange="-23.7 23.7" />
+      <default class="visual">
+        <geom type="mesh" contype="0" conaffinity="0" group="2" />
+      </default>
+      <default class="rotate">
+        <joint axis="0 0 1" />
+        <motor ctrlrange="-23.7 23.7" />
+      </default>
+      <default class="collision">
+        <geom group="3" type="mesh" rgba="1 0 0 0.3" />
+        <default class="wheel">
+          <geom size="0.022" priority="1" condim="6" friction="0.8 0.02 0.01" />
+        </default>
+      </default>
+    </default>
+  </default>
+  <asset>
+    <mesh name="AMR_base_link" file="AMR_base_link.STL" />
+    <mesh name="AMR_base_link_collision" file="AMR_base_link_collision.STL" />
+    <mesh name="AMR_FL_link" file="AMR_FL_link.STL" />
+    <mesh name="AMR_FLW_link" file="AMR_FLW_link.STL" />
+    <mesh name="AMR_FR_link" file="AMR_FR_link.STL" />
+    <mesh name="AMR_FRW_link" file="AMR_FRW_link.STL" />
+    <mesh name="AMR_RL_link" file="AMR_RL_link.STL" />
+    <mesh name="AMR_RLW_link" file="AMR_RLW_link.STL" />
+    <mesh name="AMR_RR_link" file="AMR_RR_link.STL" />
+    <mesh name="AMR_RRW_link" file="AMR_RRW_link.STL" />
+    <mesh name="openarm_base_link" file="openarm_base_link.STL" />
+    <mesh name="openarm_base_link_collision" file="openarm_base_link_collision.STL" />
+    <mesh name="chest_link" file="chest_link.STL" />
+    <mesh name="chest_link_collision" file="chest_link_collision.STL" />
+    <mesh name="L_link1" file="L_link1.STL" />
+    <mesh name="shoulder_L_link_collision" file="shoulder_L_link_collision.STL" />
+    <mesh name="L_link2" file="L_link2.STL" />
+    <mesh name="L_link3" file="L_link3.STL" />
+    <mesh name="upper_arm_L_link_collision" file="upper_arm_L_link_collision.STL" />
+    <mesh name="L_link4" file="L_link4.STL" />
+    <mesh name="lower_arm_L_link_collision" file="lower_arm_L_link_collision.STL" />
+    <mesh name="L_link5" file="L_link5.STL" />
+    <mesh name="wrist1_L_link_collision" file="wrist1_L_link_collision.STL" />
+    <mesh name="L_link6" file="L_link6.STL" />
+    <mesh name="L_link6_collision" file="L_link6_collision.STL" />
+    <mesh name="L_link7" file="L_link7.STL" />
+    <mesh name="L_link7_collision" file="L_link7_collision.STL" />
+    <mesh name="gripper_LL_link" file="gripper_LL_link.STL" />
+    <mesh name="gripper_LL_link_collision" file="gripper_LL_link_collision.STL" />
+    <mesh name="gripper_LR_link" file="gripper_LR_link.STL" />
+    <mesh name="gripper_LR_link_collision" file="gripper_LR_link_collision.STL" />
+    <mesh name="R_link1" file="R_link1.STL" />
+    <mesh name="shoulder_R_link_collision" file="shoulder_R_link_collision.STL" />
+    <mesh name="R_link2" file="R_link2.STL" />
+    <mesh name="R_link3" file="R_link3.STL" />
+    <mesh name="R_link4" file="R_link4.STL" />
+    <mesh name="R_link5" file="R_link5.STL" />
+    <mesh name="R_link6" file="R_link6.STL" />
+    <mesh name="R_link7" file="R_link7.STL" />
+    <mesh name="R_link7_collision" file="R_link7_collision.STL" />
+    <mesh name="gripper_RL_link" file="gripper_RL_link.STL" />
+    <mesh name="gripper_RL_link_collision" file="gripper_RL_link_collision.STL" />
+    <mesh name="gripper_RR_link" file="gripper_RR_link.STL" />
+    <mesh name="gripper_RR_link_collision" file="gripper_RR_link_collision.STL" />
+  </asset>
+  <worldbody>
+    <body name="AMR_base_link" pos="0 0 0.2" childclass="g7_openarm">
+      <inertial pos="-0.00420581 -0.00009293 0.03202295" quat="1 0 0 0" mass="40.0" diaginertia="1.02060130 1.65877875 2.23847353" />
+      <freejoint />
+      <site name="imu" pos="0 0 0" />
+      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_base_link" />
+      <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_base_link_collision" class="collision" />
+      <geom pos="0 0 0.13296" quat="1 0 0 0" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="openarm_base_link" />
+      <geom pos="0 0 0.13296" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="openarm_base_link_collision" class="collision" />
+      <geom pos="0 0 0.82196" quat="1 0 0 0" type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="chest_link" />
+      <geom pos="0 0 0.82196" quat="1 0 0 0" type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="chest_link_collision" class="collision" />
+      <body name="AMR_FL_link" pos="0.198 0.13 -0.05524">
+        <inertial pos="0 -0.00073433 -0.0468966" quat="0.686617 0.72696 0.00644319 -0.00667524" mass="0.3" diaginertia="0.000518152 0.000513072 0.000395036" />
+        <joint name="AMR_FL_joint" pos="0 0 0" axis="0 0 1" />
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_FL_link" />
+        <body name="AMR_FLW_link" pos="0 0 -0.0525">
+          <inertial pos="0 0 0" quat="0.581004 0.40297 0.403067 0.581022" mass="1" diaginertia="0.00219404 0.00118758 0.00118727" />
+          <joint name="AMR_FLW_joint" pos="0 0 0" axis="0 1 0" />
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_FLW_link" />
+          <geom size="0.052 0.0375" quat="0.707105 -0.707108 0 0" type="cylinder" rgba="0.792157 0.819608 0.933333 1" />
+        </body>
+      </body>
+      <body name="AMR_FR_link" pos="0.198 -0.13 -0.0552403">
+        <inertial pos="0 0.00073437 -0.0468966" quat="0.726946 0.686616 0.00685597 -0.00781548" mass="0.3" diaginertia="0.000518152 0.000513072 0.000395036" />
+        <joint name="AMR_FR_joint" pos="0 0 0" axis="0 0 1" />
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_FR_link" />
+        <body name="AMR_FRW_link" pos="0 0 -0.0525">
+          <inertial pos="0 0 0" quat="0.490323 0.509445 0.509544 0.490321" mass="1" diaginertia="0.00219393 0.0011875 0.00118724" />
+          <joint name="AMR_FRW_joint" pos="0 0 0" axis="0 1 0" />
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_FRW_link" />
+          <geom size="0.052 0.0375" quat="0.707105 -0.707108 0 0" type="cylinder" rgba="0.792157 0.819608 0.933333 1" />
+        </body>
+      </body>
+      <body name="AMR_RL_link" pos="-0.198 0.13 -0.0552403">
+        <inertial pos="0 -0.00073434 -0.0468967" quat="0.686617 0.72696 0.00644319 -0.00667524" mass="0.3" diaginertia="0.000518152 0.000513072 0.000395036" />
+        <joint name="AMR_RL_joint" pos="0 0 0" axis="0 0 1" />
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_RL_link" />
+        <body name="AMR_RLW_link" pos="0 0 -0.0525">
+          <inertial pos="0 0 0" quat="0.509512 0.490253 0.490352 0.509514" mass="1" diaginertia="0.00219393 0.0011875 0.00118724" />
+          <joint name="AMR_RLW_joint" pos="0 0 0" axis="0 1 0" />
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_RLW_link" />
+          <geom size="0.052 0.0375" quat="0.707105 -0.707108 0 0" type="cylinder" rgba="0.792157 0.819608 0.933333 1" />
+        </body>
+      </body>
+      <body name="AMR_RR_link" pos="-0.198 -0.13 -0.0552403">
+        <inertial pos="0 0.00073452 -0.0468962" quat="0.726948 0.686614 0.00684202 -0.00780074" mass="0.3" diaginertia="0.000518152 0.000513062 0.000395036" />
+        <joint name="AMR_RR_joint" pos="0 0 0" axis="0 0 1" />
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_RR_link" />
+        <body name="AMR_RRW_link" pos="0 0 -0.0525">
+          <inertial pos="0 0 0" quat="0.490323 0.509445 0.509544 0.490321" mass="1" diaginertia="0.00219393 0.0011875 0.00118724" />
+          <joint name="AMR_RRW_joint" pos="0 0 0" axis="0 1 0" />
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="AMR_RRW_link" />
+          <geom size="0.052 0.0375" quat="0.707105 -0.707108 0 0" type="cylinder" rgba="0.792157 0.819608 0.933333 1" />
+        </body>
+      </body>
+      <body name="L_link1" pos="0 0.0875 0.82196">
+        <inertial pos="0.00285795 0.0632321 -6.09e-06" quat="0.705405 0.708544 -0.0134023 -0.013784" mass="1.141" diaginertia="0.00139296 0.00110704 0.00103994" />
+        <joint name="L_1_joint" pos="0 0 0" axis="0 -1 0" range="-1.39626 3.49066" actuatorfrcrange="-40 40" />
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="L_link1" />
+        <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="shoulder_L_link_collision" class="collision" />
+        <body name="L_link2" pos="-0.0284 0.065 0">
+          <inertial pos="0.00301991 0 -0.0217183" quat="0.959565 0.000122129 -0.281488 -0.000671765" mass="0.277" diaginertia="0.000583891 0.00048214 0.000272609" />
+          <joint name="L_2_joint" pos="0 0 0" axis="1 0 0" range="-0.174533 3.31613" actuatorfrcrange="-40 40" />
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="L_link2" />
+          <body name="L_link3" pos="0.0284 0 -0.051">
+            <inertial pos="-0.00800186 -0.00033975 -0.0531398" quat="0.999747 -0.00602619 0.0216179 0.00177453" mass="1.073" diaginertia="0.00443953 0.00414023 0.000774874" />
+            <joint name="L_3_joint" pos="0 0 0" axis="0 0 -1" range="-1.5708 1.5708" actuatorfrcrange="-27 27" />
+            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="L_link3" />
+            <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="upper_arm_L_link_collision" class="collision" />
+            <body name="L_link4" pos="0 -5e-05 -0.169">
+              <inertial pos="-0.00037734 -0.00097263 -0.00461696" quat="0.999381 0.015656 0.0313694 -0.00286401" mass="0.634" diaginertia="0.000610432 0.000470224 0.000402434" />
+              <joint name="L_4_joint" pos="0 0 0" axis="0 1 0" range="-2.44346 0" actuatorfrcrange="-27 27" />
+              <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="L_link4" />
+              <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="lower_arm_L_link_collision" class="collision" />
+              <body name="L_link5" pos="0 0 -0.0955">
+                <inertial pos="-0.00157437 0.00139758 -0.0368166" quat="0.631661 0.0523669 0.0147535 0.773333" mass="0.615" diaginertia="0.000841857 0.000743186 0.000582338" />
+                <joint name="L_5_joint" pos="0 0 0" axis="0 0 -1" range="-1.5708 1.5708" actuatorfrcrange="-7 7" />
+                <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="L_link5" />
+                <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="wrist1_L_link_collision" class="collision" />
+                <body name="L_link6" pos="0 0 -0.1205">
+                  <inertial pos="-0.00011822 0.00048177 9.191e-05" quat="0.553594 0.409925 0.572546 0.44462" mass="0.475" diaginertia="0.000212439 0.00020842 0.000189701" />
+                  <joint name="L_6_joint" pos="0 0 0" axis="-1 0 0" range="-0.785398 0.785398" actuatorfrcrange="-7 7" />
+                  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="L_link6" />
+                  <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="L_link6_collision" class="collision" />
+                  <body name="L_link7" pos="0 0.03175 0">
+                    <inertial pos="-9.378e-05 -0.0292237 -0.0668171" quat="0.977859 -0.209252 -0.00135456 -0.00193605" mass="0.465" diaginertia="0.000509582 0.000432941 0.000251237" />
+                    <joint name="L_7_joint" pos="0 0 0" axis="0 -1 0" range="-1.5708 1.5708" actuatorfrcrange="-7 7" />
+                    <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="L_link7" />
+                    <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="L_link7_collision" class="collision" />
+                    <body name="gripper_LL_link" pos="0 -0.01425 -0.119">
+                      <inertial pos="0.00223798 -0.00193863 -0.021101" quat="0.709607 -0.0321404 0.108021 0.695526" mass="0.05" diaginertia="3.51027e-05 2.63791e-05 1.28282e-05" />
+                      <joint name="gripper_LL_joint" pos="0 0 0" axis="0 1 0" type="slide" range="-0.045 0.045" actuatorfrcrange="-20 20" />
+                      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="gripper_LL_link" />
+                      <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="gripper_LL_link_collision" class="collision" />
+                    </body>
+                    <body name="gripper_LR_link" pos="0 -0.04925 -0.119">
+                      <inertial pos="-0.0011596 0.00192174 -0.0210332" quat="0.715186 0.0258801 -0.114133 0.689067" mass="0.05" diaginertia="3.51699e-05 2.63121e-05 1.29579e-05" />
+                      <joint name="gripper_LR_joint" pos="0 0 0" axis="0 -1 0" type="slide" range="-0.045 0.045" actuatorfrcrange="-20 20" />
+                      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="gripper_LR_link" />
+                      <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="gripper_LR_link_collision" class="collision" />
+                    </body>
+                    <body name="L_gripper_tcp_link" pos="0.000000 -0.031750 -0.189995">
+                      <site name="L_gripper_tcp_link_site" pos="0 0 0" size="0.001" rgba="0 0 0 0" />
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+      <body name="R_link1" pos="0 -0.0875 0.82196">
+        <inertial pos="0.00285822 -0.063232 6.03e-06" quat="0.705406 0.708543 0.0133834 0.0137654" mass="1.141" diaginertia="0.00139293 0.00110708 0.00103994" />
+        <joint name="R_1_joint" pos="0 0 0" axis="0 -1 0" range="-1.39626 3.49066" actuatorfrcrange="-40 40" />
+        <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="R_link1" />
+        <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="shoulder_R_link_collision" class="collision" />
+        <body name="R_link2" pos="-0.0284 -0.065 0">
+          <inertial pos="0.00301991 0 -0.0217183" quat="0.959565 0.000122129 -0.281488 -0.000671765" mass="0.277" diaginertia="0.000583891 0.00048214 0.000272609" />
+          <joint name="R_2_joint" pos="0 0 0" axis="1 0 0" range="-3.31613 0.174533" actuatorfrcrange="-40 40" />
+          <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="R_link2" />
+          <body name="R_link3" pos="0.0284 0 -0.051">
+            <inertial pos="-0.00800186 -0.00033975 -0.0531398" quat="0.999747 -0.00602619 0.0216179 0.00177453" mass="1.073" diaginertia="0.00443953 0.00414023 0.000774874" />
+            <joint name="R_3_joint" pos="0 0 0" axis="0 0 -1" range="-1.5708 1.5708" actuatorfrcrange="-27 27" />
+            <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="R_link3" />
+            <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="upper_arm_L_link_collision" class="collision" />
+            <body name="R_link4" pos="0 0 -0.169">
+              <inertial pos="-0.00037734 -0.00102263 -0.00461696" quat="0.999381 0.015656 0.0313694 -0.00286401" mass="0.634" diaginertia="0.000610432 0.000470224 0.000402434" />
+              <joint name="R_4_joint" pos="0 0 0" axis="0 1 0" range="-2.44346 0" actuatorfrcrange="-27 27" />
+              <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="R_link4" />
+              <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="lower_arm_L_link_collision" class="collision" />
+              <body name="R_link5" pos="0 0 -0.0955">
+                <inertial pos="-0.00156592 -0.00144926 -0.0368151" quat="0.77369 0.0148717 0.0523812 0.631221" mass="0.615" diaginertia="0.000841891 0.000743093 0.000582326" />
+                <joint name="R_5_joint" pos="0 0 0" axis="0 0 -1" range="-1.5708 1.5708" actuatorfrcrange="-7 7" />
+                <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="R_link5" />
+                <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="wrist1_L_link_collision" class="collision" />
+                <body name="R_link6" pos="0 0 -0.1205">
+                  <inertial pos="0.00011815 -0.00053178 9.193e-05" quat="0.411589 0.551301 0.441536 0.575941" mass="0.475" diaginertia="0.000212445 0.000208413 0.000189702" />
+                  <joint name="R_6_joint" pos="0 0 0" axis="-1 0 0" range="-0.785398 0.785398" actuatorfrcrange="-7 7" />
+                  <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="R_link6" />
+                  <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="L_link6_collision" class="collision" />
+                  <body name="R_link7" pos="0 -0.0318 0">
+                    <inertial pos="-9.199e-05 0.0292238 -0.0668171" quat="0.977859 0.209252 -0.00134976 0.00187593" mass="0.465" diaginertia="0.000509592 0.000432941 0.000251236" />
+                    <joint name="R_7_joint" pos="0 0 0" axis="0 -1 0" range="-1.5708 1.5708" actuatorfrcrange="-7 7" />
+                    <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="R_link7" />
+                    <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="R_link7_collision" class="collision" />
+                    <body name="gripper_RL_link" pos="0 0.04925 -0.119">
+                      <inertial pos="0.00223998 -0.00193863 -0.021101" quat="0.709607 -0.0321404 0.108021 0.695526" mass="0.05" diaginertia="3.51027e-05 2.63791e-05 1.28282e-05" />
+                      <joint name="gripper_RL_joint" pos="0 0 0" axis="0 1 0" type="slide" range="0 0.045" actuatorfrcrange="-20 20" />
+                      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="gripper_RL_link" />
+                      <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="gripper_RL_link_collision" class="collision" />
+                    </body>
+                    <body name="gripper_RR_link" pos="0 0.01425 -0.119">
+                      <inertial pos="-0.00115767 0.00192173 -0.0210333" quat="0.724178 -0.0280715 0.112137 0.679856" mass="0.05" diaginertia="3.51875e-05 2.62829e-05 1.29696e-05" />
+                      <joint name="gripper_RR_joint" pos="0 0 0" axis="0 -1 0" type="slide" range="0 0.045" actuatorfrcrange="-20 20" />
+                      <geom type="mesh" contype="0" conaffinity="0" group="1" density="0" rgba="0.792157 0.819608 0.933333 1" mesh="gripper_RR_link" />
+                      <geom type="mesh" rgba="0.792157 0.819608 0.933333 1" mesh="gripper_RR_link_collision" class="collision" />
+                    </body>
+                    <body name="R_gripper_tcp_link" pos="0.000000 0.031750 -0.189995">
+                      <site name="R_gripper_tcp_link_site" pos="0 0 0" size="0.001" rgba="0 0 0 0" />
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor class="rotate" name="FL_motor" joint="AMR_FL_joint" />
+    <motor class="rotate" name="FR_motor" joint="AMR_FR_joint" />
+    <motor class="rotate" name="RL_motor" joint="AMR_RL_joint" />
+    <motor class="rotate" name="RR_motor" joint="AMR_RR_joint" />
+    <motor ctrlrange="-15 15" name="FL_wheel" joint="AMR_FLW_joint" />
+    <motor ctrlrange="-15 15" name="FR_wheel" joint="AMR_FRW_joint" />
+    <motor ctrlrange="-15 15" name="RL_wheel" joint="AMR_RLW_joint" />
+    <motor ctrlrange="-15 15" name="RR_wheel" joint="AMR_RRW_joint" />
+    <motor ctrlrange="-40 40" name="L_1_motor" joint="L_1_joint" />
+    <motor ctrlrange="-40 40" name="L_2_motor" joint="L_2_joint" />
+    <motor ctrlrange="-27 27" name="L_3_motor" joint="L_3_joint" />
+    <motor ctrlrange="-27 27" name="L_4_motor" joint="L_4_joint" />
+    <motor ctrlrange="-7 7" name="L_5_motor" joint="L_5_joint" />
+    <motor ctrlrange="-7 7" name="L_6_motor" joint="L_6_joint" />
+    <motor ctrlrange="-7 7" name="L_7_motor" joint="L_7_joint" />
+    <motor ctrlrange="-15 15" name="gripper_LL_motor" joint="gripper_LL_joint" />
+    <motor ctrlrange="-15 15" name="gripper_LR_motor" joint="gripper_LR_joint" />
+    <motor ctrlrange="-40 40" name="R_1_motor" joint="R_1_joint" />
+    <motor ctrlrange="-40 40" name="R_2_motor" joint="R_2_joint" />
+    <motor ctrlrange="-27 27" name="R_3_motor" joint="R_3_joint" />
+    <motor ctrlrange="-27 27" name="R_4_motor" joint="R_4_joint" />
+    <motor ctrlrange="-7 7" name="R_5_motor" joint="R_5_joint" />
+    <motor ctrlrange="-7 7" name="R_6_motor" joint="R_6_joint" />
+    <motor ctrlrange="-7 7" name="R_7_motor" joint="R_7_joint" />
+    <motor ctrlrange="-15 15" name="gripper_RL_motor" joint="gripper_RL_joint" />
+    <motor ctrlrange="-15 15" name="gripper_RR_motor" joint="gripper_RR_joint" />
+  </actuator>
+  <sensor>
+    <jointpos name="AMR_FL_pos" joint="AMR_FL_joint" />
+    <jointpos name="AMR_FR_pos" joint="AMR_FR_joint" />
+    <jointpos name="AMR_RL_pos" joint="AMR_RL_joint" />
+    <jointpos name="AMR_RR_pos" joint="AMR_RR_joint" />
+    <jointpos name="AMR_FLW_pos" joint="AMR_FLW_joint" />
+    <jointpos name="AMR_FRW_pos" joint="AMR_FRW_joint" />
+    <jointpos name="AMR_RLW_pos" joint="AMR_RLW_joint" />
+    <jointpos name="AMR_RRW_pos" joint="AMR_RRW_joint" />
+    <jointpos name="L_1_pos" joint="L_1_joint" />
+    <jointpos name="L_2_pos" joint="L_2_joint" />
+    <jointpos name="L_3_pos" joint="L_3_joint" />
+    <jointpos name="L_4_pos" joint="L_4_joint" />
+    <jointpos name="L_5_pos" joint="L_5_joint" />
+    <jointpos name="L_6_pos" joint="L_6_joint" />
+    <jointpos name="L_7_pos" joint="L_7_joint" />
+    <jointpos name="gripper_LL_pos" joint="gripper_LL_joint" />
+    <jointpos name="gripper_LR_pos" joint="gripper_LR_joint" />
+    <jointpos name="R_1_pos" joint="R_1_joint" />
+    <jointpos name="R_2_pos" joint="R_2_joint" />
+    <jointpos name="R_3_pos" joint="R_3_joint" />
+    <jointpos name="R_4_pos" joint="R_4_joint" />
+    <jointpos name="R_5_pos" joint="R_5_joint" />
+    <jointpos name="R_6_pos" joint="R_6_joint" />
+    <jointpos name="R_7_pos" joint="R_7_joint" />
+    <jointpos name="gripper_RL_pos" joint="gripper_RL_joint" />
+    <jointpos name="gripper_RR_pos" joint="gripper_RR_joint" />
+    <jointvel name="AMR_FL_vel" joint="AMR_FL_joint" />
+    <jointvel name="AMR_FR_vel" joint="AMR_FR_joint" />
+    <jointvel name="AMR_RL_vel" joint="AMR_RL_joint" />
+    <jointvel name="AMR_RR_vel" joint="AMR_RR_joint" />
+    <jointvel name="AMR_FLW_vel" joint="AMR_FLW_joint" />
+    <jointvel name="AMR_FRW_vel" joint="AMR_FRW_joint" />
+    <jointvel name="AMR_RLW_vel" joint="AMR_RLW_joint" />
+    <jointvel name="AMR_RRW_vel" joint="AMR_RRW_joint" />
+    <jointvel name="L_1_vel" joint="L_1_joint" />
+    <jointvel name="L_2_vel" joint="L_2_joint" />
+    <jointvel name="L_3_vel" joint="L_3_joint" />
+    <jointvel name="L_4_vel" joint="L_4_joint" />
+    <jointvel name="L_5_vel" joint="L_5_joint" />
+    <jointvel name="L_6_vel" joint="L_6_joint" />
+    <jointvel name="L_7_vel" joint="L_7_joint" />
+    <jointvel name="gripper_LL_vel" joint="gripper_LL_joint" />
+    <jointvel name="gripper_LR_vel" joint="gripper_LR_joint" />
+    <jointvel name="R_1_vel" joint="R_1_joint" />
+    <jointvel name="R_2_vel" joint="R_2_joint" />
+    <jointvel name="R_3_vel" joint="R_3_joint" />
+    <jointvel name="R_4_vel" joint="R_4_joint" />
+    <jointvel name="R_5_vel" joint="R_5_joint" />
+    <jointvel name="R_6_vel" joint="R_6_joint" />
+    <jointvel name="R_7_vel" joint="R_7_joint" />
+    <jointvel name="gripper_RL_vel" joint="gripper_RL_joint" />
+    <jointvel name="gripper_RR_vel" joint="gripper_RR_joint" />
+    <jointactuatorfrc name="AMR_FL_torque" joint="AMR_FL_joint" />
+    <jointactuatorfrc name="AMR_FR_torque" joint="AMR_FR_joint" />
+    <jointactuatorfrc name="AMR_RL_torque" joint="AMR_RL_joint" />
+    <jointactuatorfrc name="AMR_RR_torque" joint="AMR_RR_joint" />
+    <jointactuatorfrc name="AMR_FLW_torque" joint="AMR_FLW_joint" noise="0.01" />
+    <jointactuatorfrc name="AMR_FRW_torque" joint="AMR_FRW_joint" noise="0.01" />
+    <jointactuatorfrc name="AMR_RLW_torque" joint="AMR_RLW_joint" noise="0.01" />
+    <jointactuatorfrc name="AMR_RRW_torque" joint="AMR_RRW_joint" noise="0.01" />
+    <jointactuatorfrc name="L_1_torque" joint="L_1_joint" />
+    <jointactuatorfrc name="L_2_torque" joint="L_2_joint" />
+    <jointactuatorfrc name="L_3_torque" joint="L_3_joint" />
+    <jointactuatorfrc name="L_4_torque" joint="L_4_joint" />
+    <jointactuatorfrc name="L_5_torque" joint="L_5_joint" />
+    <jointactuatorfrc name="L_6_torque" joint="L_6_joint" />
+    <jointactuatorfrc name="L_7_torque" joint="L_7_joint" />
+    <jointactuatorfrc name="gripper_LL_torque" joint="gripper_LL_joint" />
+    <jointactuatorfrc name="gripper_LR_torque" joint="gripper_LR_joint" />
+    <jointactuatorfrc name="R_1_torque" joint="R_1_joint" />
+    <jointactuatorfrc name="R_2_torque" joint="R_2_joint" />
+    <jointactuatorfrc name="R_3_torque" joint="R_3_joint" />
+    <jointactuatorfrc name="R_4_torque" joint="R_4_joint" />
+    <jointactuatorfrc name="R_5_torque" joint="R_5_joint" />
+    <jointactuatorfrc name="R_6_torque" joint="R_6_joint" />
+    <jointactuatorfrc name="R_7_torque" joint="R_7_joint" />
+    <jointactuatorfrc name="gripper_RL_torque" joint="gripper_RL_joint" />
+    <jointactuatorfrc name="gripper_RR_torque" joint="gripper_RR_joint" />
+    <framequat name="imu_quat" objtype="site" objname="imu" noise="0.0" />
+    <gyro name="imu_gyro" site="imu" noise="0.0" />
+    <accelerometer name="imu_acc" site="imu" />
+    <framepos name="frame_pos" objtype="site" objname="imu" />
+    <framelinvel name="frame_lin_vel" objtype="site" objname="imu" />
+    <frameangvel name="frame_ang_vel" objtype="site" objname="imu" />
+  </sensor>
+</mujoco>
