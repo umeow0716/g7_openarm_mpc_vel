@@ -8,6 +8,10 @@ from multiprocessing import shared_memory
 from src.pinnzoo import kinematics
 from src.pinnzoo_binding import PinnZooModel
 
+from src.utils import (
+    quat_orientation_error_from_matrix,
+    quat_error_matrix_from_target,
+)
 from src.openarm_idx import (
     OPENARM_LEFT_HAND_POS,
     OPENARM_LEFT_HAND_QUAT,
@@ -238,6 +242,12 @@ def plot_shared_memory_x_target_realtime(
             left_quat = kin[OPENARM_LEFT_HAND_QUAT].copy()
             right_pos = kin[OPENARM_RIGHT_HAND_POS].copy()
             right_quat = kin[OPENARM_RIGHT_HAND_QUAT].copy()
+            
+            left_target_matrix = quat_error_matrix_from_target(left_target_quat.astype(np.float64))
+            right_target_matrix = quat_error_matrix_from_target(right_target_quat.astype(np.float64))
+
+            e_r_left_raw = quat_orientation_error_from_matrix(left_quat, left_target_matrix)
+            e_r_right_raw = quat_orientation_error_from_matrix(right_quat, right_target_matrix)
 
             e_p_left = left_pos - left_target_pos
             e_p_right = right_pos - right_target_pos
@@ -313,6 +323,17 @@ def plot_shared_memory_x_target_realtime(
                     f'R ez   = {e_p_right[2]: .6f}',
                     f'L rot  = {e_r_left: .6f}',
                     f'R rot  = {e_r_right: .6f}',
+                    '',
+                    'MPC solver rot err raw',
+                    'Euler Angle, ndarray shape=(3,), unit=rad',
+                    f'L rot raw = {np.array2string(e_r_left_raw, precision=6, suppress_small=False)}',
+                    f'R rot raw = {np.array2string(e_r_right_raw, precision=6, suppress_small=False)}',
+                    '',
+                    'Definition',
+                    'rot_err[0] = theta * u_x [rad]',
+                    'rot_err[1] = theta * u_y [rad]',
+                    'rot_err[2] = theta * u_z [rad]',
+                    '||rot_err|| = theta [rad]',
                     '',
                     'Current EE',
                     f'L pos  = [{left_pos[0]: .4f}, {left_pos[1]: .4f}, {left_pos[2]: .4f}]',
