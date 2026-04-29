@@ -21,6 +21,7 @@ from src.openarm_idx import (
 
 X_SHARED_SHAPE = (33,)
 U_SHARED_SHAPE = (21,)
+TAU_SHARED_SHAPE = (26,)
 LEFT_TARGET_POS_SHARED_SHAPE = (3,)
 LEFT_TARGET_QUAT_SHARED_SHAPE = (4,)
 RIGHT_TARGET_POS_SHARED_SHAPE = (3,)
@@ -34,9 +35,11 @@ def plot_shared_memory_x_target_realtime(
     left_target_quat_shm_name: str,
     right_target_pos_shm_name: str,
     right_target_quat_shm_name: str,
+    tau_shm_name: str | None = None,
     *,
     x_shared_shape: tuple[int, ...] = X_SHARED_SHAPE,
     u_shared_shape: tuple[int, ...] = U_SHARED_SHAPE,
+    tau_shared_shape: tuple[int, ...] = TAU_SHARED_SHAPE,
     left_target_pos_shared_shape: tuple[int, ...] = LEFT_TARGET_POS_SHARED_SHAPE,
     left_target_quat_shared_shape: tuple[int, ...] = LEFT_TARGET_QUAT_SHARED_SHAPE,
     right_target_pos_shared_shape: tuple[int, ...] = RIGHT_TARGET_POS_SHARED_SHAPE,
@@ -48,9 +51,11 @@ def plot_shared_memory_x_target_realtime(
     position_png_path: str = 'plotter_result/position_realtime.png',
     velocity_png_path: str = 'plotter_result/velocity_realtime.png',
     error_png_path: str = 'plotter_result/error_realtime.png',
+    tau_png_path: str = 'plotter_result/tau_realtime.png',
 ) -> None:
     x_shm = shared_memory.SharedMemory(name=x_shm_name)
     u_shm = shared_memory.SharedMemory(name=u_shm_name)
+    tau_shm = shared_memory.SharedMemory(name=tau_shm_name) if tau_shm_name is not None else None
     left_target_pos_shm = shared_memory.SharedMemory(name=left_target_pos_shm_name)
     left_target_quat_shm = shared_memory.SharedMemory(name=left_target_quat_shm_name)
     right_target_pos_shm = shared_memory.SharedMemory(name=right_target_pos_shm_name)
@@ -163,6 +168,18 @@ def plot_shared_memory_x_target_realtime(
     fig_pos, pos_axes, pos_lines, pos_text_l, pos_text_r = _make_series_figure('Position', 'x', x_shared_shape[0])
     fig_vel, vel_axes, vel_lines, vel_text_l, vel_text_r = _make_series_figure('Velocity', 'u', u_shared_shape[0])
 
+    fig_tau = None
+    tau_axes = []
+    tau_lines = []
+    tau_text_l = None
+    tau_text_r = None
+    if tau_shm is not None:
+        fig_tau, tau_axes, tau_lines, tau_text_l, tau_text_r = _make_series_figure(
+            'Low Level Torque',
+            'tau',
+            tau_shared_shape[0],
+        )
+
     fig_err, axs_err = plt.subplots(5, 1, sharex=True, num='Error', figsize=(14, 14))
     fig_err.subplots_adjust(left=0.08, right=0.76, top=0.96, bottom=0.06, hspace=0.55)
 
@@ -188,13 +205,20 @@ def plot_shared_memory_x_target_realtime(
     try:
         x0 = np.ndarray(x_shared_shape, dtype=dtype, buffer=x_shm.buf).copy()
         u0 = np.ndarray(u_shared_shape, dtype=dtype, buffer=u_shm.buf).copy()
+        tau0 = (
+            np.ndarray(tau_shared_shape, dtype=dtype, buffer=tau_shm.buf).copy()
+            if tau_shm is not None
+            else np.zeros((0,), dtype=np.float64)
+        )
 
         q_dim = x0.shape[0]
         u_dim = u0.shape[0]
+        tau_dim = tau0.shape[0]
 
         t_hist = deque(maxlen=max_samples)
         q_hist = [deque(maxlen=max_samples) for _ in range(q_dim)]
         v_hist = [deque(maxlen=max_samples) for _ in range(u_dim)]
+        tau_hist = [deque(maxlen=max_samples) for _ in range(tau_dim)]
 
         err_dist_l_hist = deque(maxlen=max_samples)
         err_dist_r_hist = deque(maxlen=max_samples)
@@ -228,11 +252,17 @@ def plot_shared_memory_x_target_realtime(
             plt.fignum_exists(fig_pos.number)
             and plt.fignum_exists(fig_vel.number)
             and plt.fignum_exists(fig_err.number)
+            and (fig_tau is None or plt.fignum_exists(fig_tau.number))
         ):
             now = time.perf_counter()
 
             x = np.ndarray(x_shared_shape, dtype=dtype, buffer=x_shm.buf).copy()
             u = np.ndarray(u_shared_shape, dtype=dtype, buffer=u_shm.buf).copy()
+            tau = (
+                np.ndarray(tau_shared_shape, dtype=dtype, buffer=tau_shm.buf).copy()
+                if tau_shm is not None
+                else None
+            )
 
             left_target_pos, left_target_quat, right_target_pos, right_target_quat = _read_target()
 
@@ -261,6 +291,9 @@ def plot_shared_memory_x_target_realtime(
                 q_hist[i].append(float(x[i]))
             for i in range(u_dim):
                 v_hist[i].append(float(u[i]))
+            if tau is not None:
+                for i in range(tau_dim):
+                    tau_hist[i].append(float(tau[i]))
 
             err_dist_l_hist.append(float(np.linalg.norm(e_p_left)))
             err_dist_r_hist.append(float(np.linalg.norm(e_p_right)))
@@ -284,6 +317,12 @@ def plot_shared_memory_x_target_realtime(
                 y_list = list(v_hist[i])
                 vel_lines[i].set_data(t_list, y_list)
                 _set_axis_limits(vel_axes[i], t_list, y_list)
+
+            if tau is not None:
+                for i in range(tau_dim):
+                    y_list = list(tau_hist[i])
+                    tau_lines[i].set_data(t_list, y_list)
+                    _set_axis_limits(tau_axes[i], t_list, y_list)
 
             line_err_dist_l.set_data(t_list, list(err_dist_l_hist))
             line_err_dist_r.set_data(t_list, list(err_dist_r_hist))
@@ -309,6 +348,11 @@ def plot_shared_memory_x_target_realtime(
             pos_text_r.set_text(pos_right_text)
             vel_text_l.set_text(vel_left_text)
             vel_text_r.set_text(vel_right_text)
+
+            if tau is not None and tau_text_l is not None and tau_text_r is not None:
+                tau_left_text, tau_right_text = _make_value_text('Low Level Torque', 'tau', tau)
+                tau_text_l.set_text(tau_left_text)
+                tau_text_r.set_text(tau_right_text)
 
             err_text.set_text(
                 '\n'.join([
@@ -347,6 +391,8 @@ def plot_shared_memory_x_target_realtime(
 
             fig_pos.canvas.draw_idle()
             fig_vel.canvas.draw_idle()
+            if fig_tau is not None:
+                fig_tau.canvas.draw_idle()
             fig_err.canvas.draw_idle()
 
             plt.pause(poll_dt)
@@ -356,6 +402,8 @@ def plot_shared_memory_x_target_realtime(
             fig_pos.savefig(position_png_path, dpi=150, bbox_inches='tight')
         if 'fig_vel' in locals():
             fig_vel.savefig(velocity_png_path, dpi=150, bbox_inches='tight')
+        if 'fig_tau' in locals() and fig_tau is not None:
+            fig_tau.savefig(tau_png_path, dpi=150, bbox_inches='tight')
         if 'fig_err' in locals():
             fig_err.savefig(error_png_path, dpi=150, bbox_inches='tight')
         plt.ioff()

@@ -6,6 +6,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 
+from src.low_level_controller_wbc import LowLevelController
 from src.mpc_solver import OpenArmMPCSolver
 from plotter import plot_shared_memory_x_target_realtime
 from multiprocessing import Process, shared_memory
@@ -15,12 +16,20 @@ LEFT_EE_BODY = 'L_gripper_tcp_link'
 RIGHT_EE_BODY = 'R_gripper_tcp_link'
 
 X_SHARED_SHAPE = (33,)
+Q_SHARED_SHAPE = (33,)
+V_SHARED_SHAPE = (32,)
 U_SHARED_SHAPE = (21,)
 LEFT_TARGET_POS_SHARED_SHAPE = (3,)
 LEFT_TARGET_QUAT_SHARED_SHAPE = (4,)
 RIGHT_TARGET_POS_SHARED_SHAPE = (3,)
 RIGHT_TARGET_QUAT_SHARED_SHAPE = (4,)
 DTYPE = np.float64
+
+MIT_KP_SHAPE = (26,)
+MIT_KD_SHAPE = (26,)
+MIT_POS_DES_SHAPE = (26,)
+MIT_VEL_DES_SHAPE = (26,)
+MIT_TAU_DES_SHAPE = (26,)
 
 def control_to_mj_qvel(u: np.ndarray, model: mujoco.MjModel) -> np.ndarray:
     """
@@ -46,16 +55,25 @@ def control_to_mj_qvel(u: np.ndarray, model: mujoco.MjModel) -> np.ndarray:
     qvel[14:32] = u[3:21]
     return qvel
 
-def simulation_loop(x_shm_name: str, u_shm_name: str, left_target_pos_shm_name: str, left_target_quat_shm_name: str, right_target_pos_shm_name: str, right_target_quat_shm_name: str):
-    x_shm = shared_memory.SharedMemory(name=x_shm_name)
-    u_shm = shared_memory.SharedMemory(name=u_shm_name)
 
-    u = np.ndarray(U_SHARED_SHAPE, dtype=DTYPE, buffer=u_shm.buf)
+
+def simulation_loop(x_shm_name: str, q_shm_name: str, v_shm_name: str, u_shm_name: str, left_target_pos_shm_name: str, left_target_quat_shm_name: str, right_target_pos_shm_name: str, right_target_quat_shm_name: str, mit_kp_shm_name: str, mit_kd_shm_name: str, mit_pos_des_shm_name: str, mit_vel_des_shm_name: str, mit_tau_des_shm_name: str):
+    x_shm = shared_memory.SharedMemory(name=x_shm_name)
+    q_shm = shared_memory.SharedMemory(name=q_shm_name)
+    v_shm = shared_memory.SharedMemory(name=v_shm_name)
+    u_shm = shared_memory.SharedMemory(name=u_shm_name)
 
     left_target_pos_shm = shared_memory.SharedMemory(name=left_target_pos_shm_name)
     left_target_quat_shm = shared_memory.SharedMemory(name=left_target_quat_shm_name)
     right_target_pos_shm = shared_memory.SharedMemory(name=right_target_pos_shm_name)
     right_target_quat_shm = shared_memory.SharedMemory(name=right_target_quat_shm_name)
+    
+    mit_kp_shm = shared_memory.SharedMemory(name=mit_kp_shm_name)
+    mit_kd_shm = shared_memory.SharedMemory(name=mit_kd_shm_name)
+    
+    mit_pos_des_shm = shared_memory.SharedMemory(name=mit_pos_des_shm_name)
+    mit_vel_des_shm = shared_memory.SharedMemory(name=mit_vel_des_shm_name)
+    mit_tau_des_shm = shared_memory.SharedMemory(name=mit_tau_des_shm_name)
 
     spec = mujoco.MjSpec.from_file('g7_openarm_mujoco/scene.xml')
     
@@ -105,15 +123,32 @@ def simulation_loop(x_shm_name: str, u_shm_name: str, left_target_pos_shm_name: 
     data.mocap_pos[right_target_mocap_id] = right_hand_pos
     data.mocap_quat[right_target_mocap_id] = right_hand_quat
 
-
     with mujoco.viewer.launch_passive(model, data) as viewer:
         while viewer.is_running():
             cycle_end_time = time.time() + model.opt.timestep
             
-            qvel_cmd = control_to_mj_qvel(u, model)
-            data.qvel[:] = qvel_cmd
+            mit_kp = np.ndarray(MIT_KP_SHAPE, dtype=DTYPE, buffer=mit_kp_shm.buf)
+            mit_kd = np.ndarray(MIT_KD_SHAPE, dtype=DTYPE, buffer=mit_kd_shm.buf)
+            mit_pos_des = np.ndarray(MIT_POS_DES_SHAPE, dtype=DTYPE, buffer=mit_pos_des_shm.buf)
+            mit_vel_des = np.ndarray(MIT_VEL_DES_SHAPE, dtype=DTYPE, buffer=mit_vel_des_shm.buf)
+            mit_tau_des = np.ndarray(MIT_TAU_DES_SHAPE, dtype=DTYPE, buffer=mit_tau_des_shm.buf)
+            
+            # _u = np.ndarray(U_SHARED_SHAPE, dtype=DTYPE, buffer=u_shm.buf)
+            # qvel_cmd = control_to_mj_qvel(_u, model)
+            # data.qvel[:] = qvel_cmd.astype(np.float64) # type: ignore
+            
+            qpos_err = mit_pos_des - data.qpos[7:]
+            qvel_err = mit_vel_des - data.qvel[6:]
+            tau_ff = mit_tau_des
+            tau_cmd = mit_kp * qpos_err + mit_kd * qvel_err + tau_ff
+            data.ctrl[:] = tau_cmd.astype(np.float64) # type: ignore
+            
             mujoco.mj_step(model, data)
+            
             x_shm.buf[:] = data.qpos.copy().astype(DTYPE).tobytes() # type: ignore
+            q_shm.buf[:] = data.qpos.copy().astype(DTYPE).tobytes() # type: ignore
+            v_shm.buf[:] = data.qvel.copy().astype(DTYPE).tobytes() # type: ignore
+
             left_target_pos_shm.buf[:] = data.mocap_pos[left_target_mocap_id].astype(DTYPE).tobytes() # type: ignore
             left_target_quat_shm.buf[:] = data.mocap_quat[left_target_mocap_id].astype(DTYPE).tobytes() # type: ignore
             right_target_pos_shm.buf[:] = data.mocap_pos[right_target_mocap_id].astype(DTYPE).tobytes() # type: ignore
@@ -125,17 +160,17 @@ def simulation_loop(x_shm_name: str, u_shm_name: str, left_target_pos_shm_name: 
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-
-def main():
-    x_shm = shared_memory.SharedMemory(create=True, size=X_SHARED_SHAPE[0] * DTYPE().nbytes)
-    u_shm = shared_memory.SharedMemory(create=True, size=U_SHARED_SHAPE[0] * DTYPE().nbytes)
+def mid_level_control_loop(x_shm_name: str, u_shm_name: str, left_target_pos_shm_name: str, left_target_quat_shm_name: str, right_target_pos_shm_name: str, right_target_quat_shm_name: str):
+    x_shm = shared_memory.SharedMemory(name=x_shm_name)
+    u_shm = shared_memory.SharedMemory(name=u_shm_name)
     
-    left_pos_target_shm = shared_memory.SharedMemory(create=True, size=LEFT_TARGET_POS_SHARED_SHAPE[0] * DTYPE().nbytes)
-    left_quat_target_shm = shared_memory.SharedMemory(create=True, size=LEFT_TARGET_QUAT_SHARED_SHAPE[0] * DTYPE().nbytes)
-    right_pos_target_shm = shared_memory.SharedMemory(create=True, size=RIGHT_TARGET_POS_SHARED_SHAPE[0] * DTYPE().nbytes)
-    right_quat_target_shm = shared_memory.SharedMemory(create=True, size=RIGHT_TARGET_QUAT_SHARED_SHAPE[0] * DTYPE().nbytes)
+    left_target_pos_shm = shared_memory.SharedMemory(name=left_target_pos_shm_name)
+    left_target_quat_shm = shared_memory.SharedMemory(name=left_target_quat_shm_name)
+    right_target_pos_shm = shared_memory.SharedMemory(name=right_target_pos_shm_name)
+    right_target_quat_shm = shared_memory.SharedMemory(name=right_target_quat_shm_name)
 
     mpc = OpenArmMPCSolver()
+    
     U_init = np.zeros((mpc.N, mpc.nu), dtype=np.float64)
     max_iter = 10
 
@@ -143,61 +178,121 @@ def main():
     step_count = 0
     u_cmd = np.zeros((mpc.nu,), dtype=np.float64)
     
-    process1 = Process(target=simulation_loop, args=(x_shm.name, u_shm.name, left_pos_target_shm.name, left_quat_target_shm.name, right_pos_target_shm.name, right_quat_target_shm.name))
+    while True:
+        step_start = time.time()
+
+        if step_count % solve_every == 0:
+            left_pos = np.ndarray(LEFT_TARGET_POS_SHARED_SHAPE, dtype=DTYPE, buffer=left_target_pos_shm.buf)
+            left_quat = np.ndarray(LEFT_TARGET_QUAT_SHARED_SHAPE, dtype=DTYPE, buffer=left_target_quat_shm.buf)
+            right_pos = np.ndarray(RIGHT_TARGET_POS_SHARED_SHAPE, dtype=DTYPE, buffer=right_target_pos_shm.buf)
+            right_quat = np.ndarray(RIGHT_TARGET_QUAT_SHARED_SHAPE, dtype=DTYPE, buffer=right_target_quat_shm.buf)
+
+            target = np.concatenate([
+                left_pos, left_quat,
+                right_pos, right_quat
+            ]).astype(np.float64)
+
+            x = np.ndarray(X_SHARED_SHAPE, dtype=DTYPE, buffer=x_shm.buf)
+
+            _, U_sol, success = mpc.solve_slq(
+                x0=x,
+                target=target,
+                U_init=U_init,
+                max_iter=max_iter,
+                shift_warm_start=True,
+            )
+
+            if not success:
+                U_init[:] = 0.0
+                u_cmd[:] = 0.0
+            else:
+                U_init = U_sol.copy()
+                u_cmd = U_sol[0].copy()
+            
+            step_end = time.time()
+            dt_solve = step_end - step_start
+            # print(f'SLQ step spent {dt_solve:.6f}s ({1.0 / max(dt_solve, 1e-9):.2f} Hz)')
+
+        u_shm.buf[:] = u_cmd.astype(DTYPE).tobytes() # type: ignore
+
+        step_count += 1
+    
+def low_level_control_loop(q_shm_name: str, v_shm_name: str, u_shm_name: str, mit_kp_shm_name: str, mit_kd_shm_name: str, mit_pos_des_shm_name: str, mit_vel_des_shm_name: str, mit_tau_des_shm_name: str):
+    q_shm = shared_memory.SharedMemory(name=q_shm_name)
+    v_shm = shared_memory.SharedMemory(name=v_shm_name)
+    u_shm = shared_memory.SharedMemory(name=u_shm_name)
+    
+    mit_kp_shm = shared_memory.SharedMemory(name=mit_kp_shm_name)
+    mit_kd_shm = shared_memory.SharedMemory(name=mit_kd_shm_name)
+    
+    mit_pos_des_shm = shared_memory.SharedMemory(name=mit_pos_des_shm_name)
+    mit_vel_des_shm = shared_memory.SharedMemory(name=mit_vel_des_shm_name)
+    mit_tau_des_shm = shared_memory.SharedMemory(name=mit_tau_des_shm_name)
+
+    llc = LowLevelController()
+
+    while True:
+        qpos = np.ndarray(Q_SHARED_SHAPE, dtype=DTYPE, buffer=q_shm.buf)
+        qvel = np.ndarray(V_SHARED_SHAPE, dtype=DTYPE, buffer=v_shm.buf)
+        u = np.ndarray(U_SHARED_SHAPE, dtype=DTYPE, buffer=u_shm.buf)
+        cmd = llc.update(qpos, qvel, u)
+        mit_kp_shm.buf[:] = cmd.kp.astype(DTYPE).tobytes() # type: ignore
+        mit_kd_shm.buf[:] = cmd.kd.astype(DTYPE).tobytes() # type: ignore
+        mit_pos_des_shm.buf[:] = cmd.pos_des.astype(DTYPE).tobytes() # type: ignore
+        mit_vel_des_shm.buf[:] = cmd.vel_des.astype(DTYPE).tobytes() # type: ignore
+        mit_tau_des_shm.buf[:] = cmd.tau_ff.astype(DTYPE).tobytes() # type: ignore
+        time.sleep(0.01)
+
+def main():
+    x_shm = shared_memory.SharedMemory(create=True, size=X_SHARED_SHAPE[0] * DTYPE().nbytes)
+    q_shm = shared_memory.SharedMemory(create=True, size=Q_SHARED_SHAPE[0] * DTYPE().nbytes)
+    v_shm = shared_memory.SharedMemory(create=True, size=V_SHARED_SHAPE[0] * DTYPE().nbytes)
+    u_shm = shared_memory.SharedMemory(create=True, size=U_SHARED_SHAPE[0] * DTYPE().nbytes)
+
+    left_pos_target_shm = shared_memory.SharedMemory(create=True, size=LEFT_TARGET_POS_SHARED_SHAPE[0] * DTYPE().nbytes)
+    left_quat_target_shm = shared_memory.SharedMemory(create=True, size=LEFT_TARGET_QUAT_SHARED_SHAPE[0] * DTYPE().nbytes)
+    right_pos_target_shm = shared_memory.SharedMemory(create=True, size=RIGHT_TARGET_POS_SHARED_SHAPE[0] * DTYPE().nbytes)
+    right_quat_target_shm = shared_memory.SharedMemory(create=True, size=RIGHT_TARGET_QUAT_SHARED_SHAPE[0] * DTYPE().nbytes)
+    
+    mit_kp_shm = shared_memory.SharedMemory(create=True, size=MIT_KP_SHAPE[0] * DTYPE().nbytes)
+    mit_kd_shm = shared_memory.SharedMemory(create=True, size=MIT_KD_SHAPE[0] * DTYPE().nbytes) 
+    
+    mit_pos_des_shm = shared_memory.SharedMemory(create=True, size=MIT_POS_DES_SHAPE[0] * DTYPE().nbytes)
+    mit_vel_des_shm = shared_memory.SharedMemory(create=True, size=MIT_VEL_DES_SHAPE[0] * DTYPE().nbytes)
+    mit_tau_des_shm = shared_memory.SharedMemory(create=True, size=MIT_TAU_DES_SHAPE[0] * DTYPE().nbytes)
+    
+    process1 = Process(target=simulation_loop, args=(x_shm.name, q_shm.name, v_shm.name, u_shm.name, left_pos_target_shm.name, left_quat_target_shm.name, right_pos_target_shm.name, right_quat_target_shm.name, mit_kp_shm.name, mit_kd_shm.name, mit_pos_des_shm.name, mit_vel_des_shm.name, mit_tau_des_shm.name))
     process1.start()
-    process2 = Process(target=plot_shared_memory_x_target_realtime, args=(x_shm.name, u_shm.name, left_pos_target_shm.name, left_quat_target_shm.name, right_pos_target_shm.name, right_quat_target_shm.name))
+    process2 = Process(target=plot_shared_memory_x_target_realtime, args=(x_shm.name, u_shm.name, left_pos_target_shm.name, left_quat_target_shm.name, right_pos_target_shm.name, right_quat_target_shm.name, mit_tau_des_shm.name))
     process2.start()
+    process3 = Process(target=mid_level_control_loop, args=(x_shm.name, u_shm.name, left_pos_target_shm.name, left_quat_target_shm.name, right_pos_target_shm.name, right_quat_target_shm.name))
+    process3.start()
+    process4 = Process(target=low_level_control_loop, args=(q_shm.name, v_shm.name, u_shm.name, mit_kp_shm.name, mit_kd_shm.name, mit_pos_des_shm.name, mit_vel_des_shm.name, mit_tau_des_shm.name))
+    process4.start()
     
     def onexit():
         process1.terminate()
         os.kill(process2.pid, signal.SIGINT)
         process2.join()
+        process3.terminate()
+        process4.terminate()
         x_shm.close()
+        q_shm.close()
+        v_shm.close()
         u_shm.close()
         left_pos_target_shm.close()
         left_quat_target_shm.close()
         right_pos_target_shm.close()
         right_quat_target_shm.close()
+        mit_pos_des_shm.close()
+        mit_vel_des_shm.close()
+        mit_tau_des_shm.close()
 
     atexit.register(onexit)
 
     try:
         while True:
-            step_start = time.time()
-
-            if step_count % solve_every == 0:
-                left_pos = np.ndarray(LEFT_TARGET_POS_SHARED_SHAPE, dtype=DTYPE, buffer=left_pos_target_shm.buf)
-                left_quat = np.ndarray(LEFT_TARGET_QUAT_SHARED_SHAPE, dtype=DTYPE, buffer=left_quat_target_shm.buf)
-                right_pos = np.ndarray(RIGHT_TARGET_POS_SHARED_SHAPE, dtype=DTYPE, buffer=right_pos_target_shm.buf)
-                right_quat = np.ndarray(RIGHT_TARGET_QUAT_SHARED_SHAPE, dtype=DTYPE, buffer=right_quat_target_shm.buf)
-
-                target = np.concatenate([
-                    left_pos, left_quat,
-                    right_pos, right_quat
-                ]).astype(np.float64)
-
-                x = np.ndarray(X_SHARED_SHAPE, dtype=DTYPE, buffer=x_shm.buf)
-
-                _, U_sol, success = mpc.solve_slq(
-                    x0=x,
-                    target=target,
-                    U_init=U_init,
-                    max_iter=max_iter,
-                    shift_warm_start=True,
-                )
-                U_init = U_sol.copy()
-
-                u_cmd = U_sol[0].copy()
-                if not success:
-                    u_cmd[:] = 0.0
-                
-                step_end = time.time()
-                dt_solve = step_end - step_start
-                print(f'SLQ step spent {dt_solve:.6f}s ({1.0 / max(dt_solve, 1e-9):.2f} Hz)')
-
-            u_shm.buf[:] = u_cmd.astype(DTYPE).tobytes() # type: ignore
-
-            step_count += 1
+            time.sleep(10 ** 6)
     except KeyboardInterrupt:
         pass
 
