@@ -1,33 +1,36 @@
-"""Whole-body QP low-level controller for the G7 OpenArm mobile manipulator.
+"""TSID-lite low-level whole-body controller for G7 OpenArm.
 
-Drop-in replacement for src/low_level_controller_pid.py.
+This file is intentionally a new controller file, not a replacement for
+``low_level_controller_wbc.py``.
 
-Current architecture
+The controller keeps the same drop-in update API:
+
+    command = LowLevelController.update(qpos, qvel, u_des)
+
+where ``u_des`` is the existing 21-D velocity-planner output:
+
+    [base_vx, base_vy, base_wz, left_arm_vel(9), right_arm_vel(9)]
+
+The TSID part is an instantaneous inverse-dynamics QP.  It does not rollout a
+PID trajectory.  At each control tick it solves for generalized acceleration
+``vdot`` and actuator torque ``tau``:
+
+    minimize   || J_ee(q) vdot + Jdot_ee(q, v) v - xddot_ee_des ||^2
+             + || S_arm vdot - qddot_arm_des ||^2
+             + || tau ||^2 + || tau - tau_prev ||^2
+
+    subject to S_act (M(q) vdot + C(q, v)) - tau = 0
+               optional floating-base vdot = 0
+               tau_min <= tau <= tau_max
+
+Important limitation
 --------------------
-The mid-level MPC outputs a 21-D velocity command:
-
-    u_des = [base_vx, base_vy, base_wz, left_arm_vel(9), right_arm_vel(9)]
-
-This controller maps that command into the 26 MuJoCo / MIT actuator order:
-
-    [FL, FR, RL, RR, FLW, FRW, RLW, RRW,
-     L_1 ... L_7, gripper_LL, gripper_LR,
-     R_1 ... R_7, gripper_RL, gripper_RR]
-
-Unlike the PID version, the feedback loop is acceleration-level and the torque is
-computed through an inverse-dynamics QP using the library equations:
-
-    q_dot = E(q) v
-    M(q) v_dot + C(q, v) = B tau + J(q)^T lambda
-
-For this project file, no contact Jacobian / contact force lambda is available in
-wrapper.c, so the implemented equality is the actuated part of inverse dynamics:
-
-    S_act (M(q) v_dot + C(q, v)) - tau_act = 0
-
-where S_act selects the 26 actuated generalized-velocity rows in MuJoCo actuator
-order. Floating-base/contact dynamics can be added later by introducing contact
-force variables lambda and contact constraints.
+This is TSID-lite, not full contact TSID.  The current generated library exposes
+``M``, ``C``, inverse dynamics, end-effector kinematics, task velocity, and the
+task-velocity Jacobian.  It does not expose wheel-ground contact / rolling
+constraint Jacobians.  Therefore the mobile base is still controlled with the
+stable original swerve PID path by default, while TSID is used for the upper body
+/ end-effector torque feed-forward.
 """
 
 from __future__ import annotations
@@ -50,6 +53,8 @@ from .openarm_idx import (
     OPENARM_U_BASE_WZ,
     OPENARM_U_LEFT_JOINT_ALL,
     OPENARM_U_RIGHT_JOINT_ALL,
+    OPENARM_LEFT_HAND_POS,
+    OPENARM_RIGHT_HAND_POS,
 )
 from .utils import quat_to_rotmat
 
@@ -80,16 +85,26 @@ class MITCommand:
 
 
 @dataclass(slots=True)
-class WBCQPWeights:
-    """Diagonal QP weights.
+class TSIDTaskData:
+    """Acceleration-level task written as ``A @ vdot ~= rhs``."""
 
-    The QP tracks desired generalized accelerations of the actuated coordinates.
-    Larger acceleration weights make the controller follow the mid-level velocity
-    command more aggressively. Larger torque weights make the torque smaller.
+    jacobian: FloatArray
+    rhs: FloatArray
+    weight_diag: FloatArray
+
+
+@dataclass(slots=True)
+class TSIDQPWeights:
+    """Diagonal TSID QP weights.
+
+    ``ee_pos_acc`` weights the true task-space acceleration objective.
+    ``arm_acc`` is a joint-space posture / velocity-tracking secondary task.
+    Larger torque weights make the torque smaller and less aggressive.
     """
 
-    steering_acc: float = 20.0
-    wheel_acc: float = 10.0
+    ee_pos_acc: float = 120.0
+    steering_acc: float = 10.0
+    wheel_acc: float = 5.0
     arm_acc: FloatArray | float = field(
         default_factory=lambda: np.array(
             [25.0, 25.0, 20.0, 20.0, 10.0, 10.0, 8.0, 5.0, 5.0] * 2,
@@ -107,7 +122,7 @@ class WBCQPWeights:
 
 
 @dataclass(slots=True)
-class WBCLowLevelControllerConfig:
+class TSIDLowLevelControllerConfig:
     dt: float = 0.01
     base_velocity_frame: VelocityFrame = "world"
 
@@ -117,19 +132,49 @@ class WBCLowLevelControllerConfig:
     rl_pos_xy_m: tuple[float, float] = (-0.198, 0.13)
     rr_pos_xy_m: tuple[float, float] = (-0.198, -0.13)
 
-    # QP acceleration feed-forward gains.  The arm and wheel velocity feedback
-    # is closed through the MIT kd field below, so these are zero by default.
-    # Keeping velocity feedback outside of the QP makes the controller respond
-    # at every MuJoCo step instead of only when the 100 Hz low-level process
-    # recomputes tau_ff.
+    # These gains generate desired accelerations for the secondary joint-space
+    # task.  The primary Cartesian task is configured by ee_position_kp and
+    # ee_velocity_kd below.
     steering_kp: float = 80.0
     steering_kd: float = 12.0
     wheel_kd: float = 0.0
     arm_kd: FloatArray | float = field(
-        default_factory=lambda: np.zeros(18, dtype=np.float64)
+        default_factory=lambda: np.array(
+            [28.0, 28.0, 22.0, 22.0, 10.0, 10.0, 8.0, 4.0, 4.0] * 2,
+            dtype=np.float64,
+        ) * 2.0
     )
 
-    command_smoothing_alpha: float = 0.10
+    # TSID end-effector task.  Without an explicit EE position target, this
+    # behaves as an EE velocity-tracking task generated from the planner's
+    # desired arm joint velocity.  If set_ee_position_target() is called, the
+    # same task also adds position feedback.
+    enable_ee_position_task: bool = True
+    ee_position_kp: float = 80.0
+    ee_velocity_kd: float = 24.0
+    ee_acc_limit_m_s2: float = 25.0
+    use_base_velocity_in_ee_reference: bool = False
+
+    enable_arm_joint_task: bool = True
+
+    # Optional whole-command smoothing. Keep this at 0.0 when only the mobile
+    # base should be smoothed, so arm velocity commands remain responsive.
+    command_smoothing_alpha: float = 0.0
+
+    # Smooth only the mobile-base command [vx, vy, wz] before converting it to
+    # swerve steering / wheel targets. Larger alpha means smoother but slower.
+    base_command_smoothing_alpha: float = 0.10
+
+    # Hard velocity limits applied to the mobile-base command before smoothing.
+    base_vx_limit_m_s: float = 0.25
+    base_vy_limit_m_s: float = 0.25
+    base_wz_limit_rad_s: float = 0.50
+
+    # Slew-rate limits applied after smoothing. These are command acceleration
+    # limits, not physical dynamics constraints.
+    base_linear_acc_limit_m_s2: float = 0.35
+    base_angular_acc_limit_rad_s2: float = 0.80
+
     return_zero_command_on_nonfinite: bool = True
     min_module_speed_m_s: float = 1e-4
 
@@ -162,11 +207,10 @@ class WBCLowLevelControllerConfig:
     # produced by these original PID loops.
     use_original_base_pid: bool = True
     steering_position_pid: PIDGains = field(
-        default_factory=lambda: PIDGains(kp=1.0, ki=0.0, kd=0.001)
+        default_factory=lambda: PIDGains(kp=5.0, ki=0.0, kd=0.05)
     )
-    wheel_velocity_pid: PIDGains = field(
-        default_factory=lambda: PIDGains(kp=0.5, ki=0.0, kd=0.008)
-    )
+
+    wheel_velocity_pid = PIDGains(kp=4.0, ki=0.10, kd=0.02)
     steering_integral_limit: float = 0.8
     wheel_integral_limit: float = 5.0
 
@@ -193,7 +237,7 @@ class WBCLowLevelControllerConfig:
     bias_position_preview_s: float = 0.05
 
     steering_tau_limit: float = 23.7
-    wheel_tau_limit: float = 15.0
+    wheel_tau_limit: float = 8.0
     arm_tau_limit_scale: float = 1.0
 
     max_active_set_iter: int = 8
@@ -208,7 +252,7 @@ class WBCLowLevelControllerConfig:
     # real gravity/bias compensation for the arms.
     constrain_floating_base_acceleration: bool = True
 
-    weights: WBCQPWeights = field(default_factory=WBCQPWeights)
+    weights: TSIDQPWeights = field(default_factory=TSIDQPWeights)
 
 
 class WholeBodyDynamicsLibrary:
@@ -225,10 +269,14 @@ class WholeBodyDynamicsLibrary:
             extern const char* config_names[];
             extern const char* vel_names[];
             extern const char* torque_names[];
+            extern const char* kinematics_bodies[];
             void M_func_wrapper(double* x_in, double* M_out);
             void C_func_wrapper(double* x_in, double* C_out);
             void velocity_kinematics_wrapper(double* x_in, double* E_out);
             void inverse_dynamics_wrapper(double* x_in, double* vdot_in, double* tau_out);
+            void kinematics_wrapper(double* x_in, double* locs_out);
+            void kinematics_velocity_wrapper(double* x_in, double* locs_dot_out);
+            void kinematics_velocity_jacobian_wrapper(double* x_in, double* J_dot_out);
             """
         )
         self.lib = self.ffi.dlopen(os.path.abspath(lib_path))
@@ -236,6 +284,8 @@ class WholeBodyDynamicsLibrary:
         self.nq = self._get_c_array_len(self.lib.config_names)  # type: ignore[attr-defined]
         self.nv = self._get_c_array_len(self.lib.vel_names)  # type: ignore[attr-defined]
         self.ntorque_names = self._get_c_array_len(self.lib.torque_names)  # type: ignore[attr-defined]
+        self.bodies_count = self._get_c_array_len(self.lib.kinematics_bodies)  # type: ignore[attr-defined]
+        self.kinematics_size = 7 * self.bodies_count
         self.nx = self.nq + self.nv
 
         if self.nq != OPENARM_NQ or self.nv != OPENARM_NV:
@@ -279,6 +329,30 @@ class WholeBodyDynamicsLibrary:
             self.ffi.cast("double*", out.ctypes.data),
         )
         return out.reshape((self.nq, self.nv), order="F")
+
+    def kinematics(self, x: FloatArray) -> FloatArray:
+        out = np.empty(self.kinematics_size, dtype=np.float64)
+        self.lib.kinematics_wrapper(  # type: ignore[attr-defined]
+            self.ffi.cast("double*", x.ctypes.data),
+            self.ffi.cast("double*", out.ctypes.data),
+        )
+        return out
+
+    def kinematics_velocity(self, x: FloatArray) -> FloatArray:
+        out = np.empty(self.kinematics_size, dtype=np.float64)
+        self.lib.kinematics_velocity_wrapper(  # type: ignore[attr-defined]
+            self.ffi.cast("double*", x.ctypes.data),
+            self.ffi.cast("double*", out.ctypes.data),
+        )
+        return out
+
+    def kinematics_velocity_jacobian(self, x: FloatArray) -> FloatArray:
+        out = np.empty(self.kinematics_size * self.nx, dtype=np.float64)
+        self.lib.kinematics_velocity_jacobian_wrapper(  # type: ignore[attr-defined]
+            self.ffi.cast("double*", x.ctypes.data),
+            self.ffi.cast("double*", out.ctypes.data),
+        )
+        return out.reshape((self.kinematics_size, self.nx), order="F")
 
     def inverse_dynamics_generalized(self, x: FloatArray, vdot: FloatArray) -> FloatArray:
         out = np.empty(self.nv, dtype=np.float64)
@@ -361,6 +435,16 @@ class LowLevelController:
     _wheel_act_idx = np.array([4, 5, 6, 7], dtype=np.int32)
     _arm_act_idx = np.arange(8, 26, dtype=np.int32)
 
+    # Rows in the 14-D kinematics output used by the TSID position task:
+    # left TCP xyz and right TCP xyz.
+    _ee_pos_rows = np.array(
+        [
+            *range(OPENARM_LEFT_HAND_POS.start, OPENARM_LEFT_HAND_POS.stop),
+            *range(OPENARM_RIGHT_HAND_POS.start, OPENARM_RIGHT_HAND_POS.stop),
+        ],
+        dtype=np.int32,
+    )
+
     _arm_xml_tau_limit = np.array(
         [
             40.0,
@@ -387,15 +471,16 @@ class LowLevelController:
 
     def __init__(
         self,
-        config: WBCLowLevelControllerConfig | None = None,
+        config: TSIDLowLevelControllerConfig | None = None,
         lib_path: str = "include/libg7_openarm_quat.so",
     ) -> None:
-        self.config = config if config is not None else WBCLowLevelControllerConfig()
+        self.config = config if config is not None else TSIDLowLevelControllerConfig()
         self.lib_path = lib_path
         self.dyn = WholeBodyDynamicsLibrary(lib_path)
 
         self.num_motors = len(self.motor_names)
         self._prev_u_des = np.zeros(OPENARM_NU, dtype=np.float64)
+        self._prev_base_cmd = np.zeros(3, dtype=np.float64)
         self._prev_wheel_vel_des = np.zeros(4, dtype=np.float64)
         self._prev_arm_vel_des = np.zeros(18, dtype=np.float64)
         self._prev_tau = np.zeros(self.num_motors, dtype=np.float64)
@@ -404,6 +489,7 @@ class LowLevelController:
         self._steering_integral = np.zeros(4, dtype=np.float64)
         self._wheel_integral = np.zeros(4, dtype=np.float64)
         self._initialized = False
+        self._ee_pos_target: FloatArray | None = None
 
         self._module_xy = np.array(
             [
@@ -428,8 +514,34 @@ class LowLevelController:
         self._selection_act = np.zeros((self.num_motors, OPENARM_NV), dtype=np.float64)
         self._selection_act[np.arange(self.num_motors), self._actuated_v_idx] = 1.0
 
+    def set_ee_position_target(
+        self,
+        left_pos_target: FloatArray,
+        right_pos_target: FloatArray,
+    ) -> None:
+        """Enable TSID Cartesian position feedback for both TCPs.
+
+        The target is optional because the existing low-level API only receives
+        ``u_des``.  If this is never called, the EE task is velocity-only.
+        """
+        left = np.asarray(left_pos_target, dtype=np.float64)
+        right = np.asarray(right_pos_target, dtype=np.float64)
+        if left.shape != (3,) or right.shape != (3,):
+            raise ValueError("left_pos_target and right_pos_target must both have shape (3,)")
+        target = np.empty(6, dtype=np.float64)
+        target[:3] = left
+        target[3:] = right
+        if not np.all(np.isfinite(target)):
+            raise ValueError("EE position target must be finite")
+        self._ee_pos_target = target
+
+    def clear_ee_position_target(self) -> None:
+        """Disable Cartesian position feedback and keep velocity-only TSID."""
+        self._ee_pos_target = None
+
     def reset(self) -> None:
         self._prev_u_des[:] = 0.0
+        self._prev_base_cmd[:] = 0.0
         self._prev_wheel_vel_des[:] = 0.0
         self._prev_arm_vel_des[:] = 0.0
         self._prev_tau[:] = 0.0
@@ -510,10 +622,18 @@ class LowLevelController:
                 return self._zero_command()
             raise FloatingPointError("mass matrix or bias force contains non-finite values")
 
-        _, tau_act = self._solve_inverse_dynamics_qp(
+        tsid_task = self._build_tsid_task(
+            qpos=qpos,
+            qvel=qvel,
+            u_cmd=u_cmd,
+            arm_vel_des=arm_vel_des,
+        )
+
+        _, tau_act = self._solve_tsid_qp(
             mass_matrix=mass_matrix,
             bias_force=bias_force,
             desired_act_acc=desired_act_acc,
+            tsid_task=tsid_task,
         )
         if not np.all(np.isfinite(tau_act)):
             if self.config.return_zero_command_on_nonfinite:
@@ -606,13 +726,68 @@ class LowLevelController:
         return self.dyn.make_state(qpos_ff, qvel_ff)
 
     def _smooth_command(self, u_des: FloatArray) -> FloatArray:
-        alpha = float(np.clip(self.config.command_smoothing_alpha, 0.0, 0.999))
+        """Smooth planner commands, with extra filtering for base vx/vy/wz.
+
+        ``command_smoothing_alpha`` still performs the original full 21-D
+        smoothing.  The new base-specific path then limits and smooths only
+        [base_vx, base_vy, base_wz], so the arm velocity command can stay fast
+        while the swerve base receives gentler velocity targets.
+        """
+        full_alpha = float(np.clip(self.config.command_smoothing_alpha, 0.0, 0.999))
+        base_indices = np.array(
+            [OPENARM_U_BASE_VX, OPENARM_U_BASE_VY, OPENARM_U_BASE_WZ],
+            dtype=np.int32,
+        )
+
         if not self._initialized:
             self._prev_u_des[:] = u_des
+            self._prev_base_cmd[:] = u_des[base_indices]
             self._initialized = True
             return u_des.copy()
 
-        u_cmd = alpha * self._prev_u_des + (1.0 - alpha) * u_des
+        u_cmd = full_alpha * self._prev_u_des + (1.0 - full_alpha) * u_des
+        base_raw = u_cmd[base_indices].astype(np.float64, copy=True)
+
+        # 1) Hard-limit the base command so a far target cannot request a huge
+        # instantaneous chassis velocity.
+        base_raw[0] = np.clip(
+            base_raw[0],
+            -self.config.base_vx_limit_m_s,
+            self.config.base_vx_limit_m_s,
+        )
+        base_raw[1] = np.clip(
+            base_raw[1],
+            -self.config.base_vy_limit_m_s,
+            self.config.base_vy_limit_m_s,
+        )
+        base_raw[2] = np.clip(
+            base_raw[2],
+            -self.config.base_wz_limit_rad_s,
+            self.config.base_wz_limit_rad_s,
+        )
+
+        # 2) First-order low-pass smoothing. Higher alpha = smoother/slower.
+        base_alpha = float(np.clip(self.config.base_command_smoothing_alpha, 0.0, 0.999))
+        base_smoothed = base_alpha * self._prev_base_cmd + (1.0 - base_alpha) * base_raw
+
+        # 3) Slew-rate limit, so vx/vy/wz cannot jump too much in one tick.
+        dt = max(self.config.dt, 1e-9)
+        max_delta = np.array(
+            [
+                self.config.base_linear_acc_limit_m_s2 * dt,
+                self.config.base_linear_acc_limit_m_s2 * dt,
+                self.config.base_angular_acc_limit_rad_s2 * dt,
+            ],
+            dtype=np.float64,
+        )
+        base_cmd = self._prev_base_cmd + np.clip(
+            base_smoothed - self._prev_base_cmd,
+            -max_delta,
+            max_delta,
+        )
+
+        u_cmd[base_indices] = base_cmd
+        self._prev_base_cmd[:] = base_cmd
         self._prev_u_des[:] = u_cmd
         return u_cmd
 
@@ -743,11 +918,108 @@ class LowLevelController:
             raise FloatingPointError("desired actuator acceleration contains non-finite values")
         return acc
 
-    def _solve_inverse_dynamics_qp(
+    def _build_tsid_task(
+        self,
+        qpos: FloatArray,
+        qvel: FloatArray,
+        u_cmd: FloatArray,
+        arm_vel_des: FloatArray,
+    ) -> TSIDTaskData:
+        """Build the Cartesian TSID task ``A @ vdot ~= rhs``.
+
+        The generated ``kinematics_velocity_jacobian`` returns
+        ``d(kinematics_velocity) / d[q, v]``.  Since
+        ``kinematics_velocity = J(q) v``, we recover:
+
+            J       = d(kinematics_velocity) / dv
+            Jdot v  = d(kinematics_velocity) / dq * qdot
+
+        Therefore task acceleration is:
+
+            xddot = J vdot + Jdot v
+        """
+        if not self.config.enable_ee_position_task:
+            return TSIDTaskData(
+                jacobian=np.zeros((0, OPENARM_NV), dtype=np.float64),
+                rhs=np.zeros(0, dtype=np.float64),
+                weight_diag=np.zeros(0, dtype=np.float64),
+            )
+
+        x_now = self.dyn.make_state(qpos, qvel)
+        task_vel_now_all = self.dyn.kinematics_velocity(x_now)
+        task_vel_jac_all = self.dyn.kinematics_velocity_jacobian(x_now)
+        velocity_kinematics = self.dyn.velocity_kinematics_matrix(x_now)
+        qdot = velocity_kinematics @ qvel
+
+        rows = self._ee_pos_rows
+        task_jacobian = task_vel_jac_all[rows, OPENARM_NQ:]
+        jdot_v = task_vel_jac_all[rows, :OPENARM_NQ] @ qdot
+        task_vel_now = task_vel_now_all[rows]
+
+        qvel_ref = qvel.copy()
+        qvel_ref[self._arm_qvel_idx] = arm_vel_des
+
+        if self.config.use_base_velocity_in_ee_reference:
+            vx = float(u_cmd[OPENARM_U_BASE_VX])
+            vy = float(u_cmd[OPENARM_U_BASE_VY])
+            wz = float(u_cmd[OPENARM_U_BASE_WZ])
+            if self.config.base_velocity_frame == "body":
+                rot_world_from_body = quat_to_rotmat(qpos[OPENARM_WORLD_QUAT])
+                v_world = rot_world_from_body @ np.array([vx, vy, 0.0], dtype=np.float64)
+                qvel_ref[0] = float(v_world[0])
+                qvel_ref[1] = float(v_world[1])
+            else:
+                qvel_ref[0] = vx
+                qvel_ref[1] = vy
+            qvel_ref[5] = wz
+
+        x_ref = self.dyn.make_state(qpos, qvel_ref)
+        task_vel_ref = self.dyn.kinematics_velocity(x_ref)[rows]
+
+        task_acc_des = self.config.ee_velocity_kd * (task_vel_ref - task_vel_now)
+
+        if self._ee_pos_target is not None:
+            task_pos_now = self.dyn.kinematics(x_now)[rows]
+            task_acc_des += self.config.ee_position_kp * (self._ee_pos_target - task_pos_now)
+
+        task_acc_des = np.clip(
+            task_acc_des,
+            -self.config.ee_acc_limit_m_s2,
+            self.config.ee_acc_limit_m_s2,
+        )
+
+        rhs = task_acc_des - jdot_v
+        weight_diag = np.full(
+            len(rows),
+            self.config.weights.ee_pos_acc,
+            dtype=np.float64,
+        )
+
+        if not (
+            np.all(np.isfinite(task_jacobian))
+            and np.all(np.isfinite(rhs))
+            and np.all(np.isfinite(weight_diag))
+        ):
+            if self.config.return_zero_command_on_nonfinite:
+                return TSIDTaskData(
+                    jacobian=np.zeros((0, OPENARM_NV), dtype=np.float64),
+                    rhs=np.zeros(0, dtype=np.float64),
+                    weight_diag=np.zeros(0, dtype=np.float64),
+                )
+            raise FloatingPointError("TSID task contains non-finite values")
+
+        return TSIDTaskData(
+            jacobian=task_jacobian,
+            rhs=rhs,
+            weight_diag=weight_diag,
+        )
+
+    def _solve_tsid_qp(
         self,
         mass_matrix: FloatArray,
         bias_force: FloatArray,
         desired_act_acc: FloatArray,
+        tsid_task: TSIDTaskData,
     ) -> tuple[FloatArray, FloatArray]:
         nv = OPENARM_NV
         na = self.num_motors
@@ -757,16 +1029,27 @@ class LowLevelController:
         mass_act = mass_matrix[self._actuated_v_idx, :]
         bias_act = bias_force[self._actuated_v_idx]
 
-        acc_weight_diag = self._acceleration_weight_diag()
-        torque_weight_diag = np.full(na, self.config.weights.torque, dtype=np.float64)
-        torque_rate_weight_diag = np.full(na, self.config.weights.torque_rate, dtype=np.float64)
-
         hessian = np.zeros((nvar, nvar), dtype=np.float64)
         gradient = np.zeros(nvar, dtype=np.float64)
 
-        hessian[:nv, :nv] += selection.T @ (acc_weight_diag[:, None] * selection)
-        gradient[:nv] += -(selection.T @ (acc_weight_diag * desired_act_acc))
+        # Primary TSID Cartesian task: J_ee vdot ~= xddot_des - Jdot v.
+        if tsid_task.jacobian.shape[0] > 0:
+            task_a = tsid_task.jacobian
+            task_b = tsid_task.rhs
+            task_w = tsid_task.weight_diag
+            hessian[:nv, :nv] += task_a.T @ (task_w[:, None] * task_a)
+            gradient[:nv] += -(task_a.T @ (task_w * task_b))
 
+        # Secondary joint-space task. This keeps the solution close to the
+        # velocity planner's arm command even when the Cartesian task is
+        # underdetermined or locally singular.
+        if self.config.enable_arm_joint_task:
+            acc_weight_diag = self._acceleration_weight_diag()
+            hessian[:nv, :nv] += selection.T @ (acc_weight_diag[:, None] * selection)
+            gradient[:nv] += -(selection.T @ (acc_weight_diag * desired_act_acc))
+
+        torque_weight_diag = np.full(na, self.config.weights.torque, dtype=np.float64)
+        torque_rate_weight_diag = np.full(na, self.config.weights.torque_rate, dtype=np.float64)
         hessian[nv:, nv:] += np.diag(torque_weight_diag + torque_rate_weight_diag)
         gradient[nv:] += -(torque_rate_weight_diag * self._prev_tau)
 
@@ -789,10 +1072,6 @@ class LowLevelController:
         equality_rhs = -bias_act
 
         if self.config.constrain_floating_base_acceleration:
-            # Without contact-force variables, these six floating-base
-            # accelerations are otherwise fake optimization slack variables.
-            # Constraining them prevents gravity from being cancelled by an
-            # unreal base acceleration and restores arm gravity compensation.
             base_acc_equality = np.zeros((len(self._floating_v_idx), nvar), dtype=np.float64)
             base_acc_equality[:, self._floating_v_idx] = np.eye(
                 len(self._floating_v_idx),
@@ -949,3 +1228,8 @@ class LowLevelController:
             target_angle = float(self._wrap_to_pi(raw_angle))
             target_wheel_vel = raw_wheel_vel
         return target_angle, target_wheel_vel
+
+
+# Backward-friendly alias for explicit imports.
+TSIDLowLevelController = LowLevelController
+
