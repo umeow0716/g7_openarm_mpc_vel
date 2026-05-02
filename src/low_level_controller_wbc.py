@@ -207,10 +207,11 @@ class TSIDLowLevelControllerConfig:
     # produced by these original PID loops.
     use_original_base_pid: bool = True
     steering_position_pid: PIDGains = field(
-        default_factory=lambda: PIDGains(kp=5.0, ki=0.0, kd=0.05)
+        default_factory=lambda: PIDGains(kp=1.0, ki=0.0, kd=0.001)
     )
-
-    wheel_velocity_pid = PIDGains(kp=4.0, ki=0.10, kd=0.02)
+    wheel_velocity_pid: PIDGains = field(
+        default_factory=lambda: PIDGains(kp=0.5, ki=0.0, kd=0.008)
+    )
     steering_integral_limit: float = 0.8
     wheel_integral_limit: float = 5.0
 
