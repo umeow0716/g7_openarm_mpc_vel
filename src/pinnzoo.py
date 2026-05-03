@@ -59,6 +59,25 @@ def forward_dynamics_deriv(
 
     return dvdot_dx, dvdot_dtau
 
+def inverse_dynamics(
+    model: 'PinnZooModel',
+    x: npt.NDArray[np.float64],
+    vdot: npt.NDArray[np.float64],
+):
+    tau = np.empty(model.nv, dtype=np.float64)
+
+    p_x = model.ffi.cast("double*", x.ctypes.data)
+    p_vdot = model.ffi.cast("double*", vdot.ctypes.data)
+    p_tau = model.ffi.cast("double*", tau.ctypes.data)
+
+    model.lib.inverse_dynamics_wrapper(  # type: ignore
+        p_x,
+        p_vdot,
+        p_tau,
+    )
+
+    return tau
+
 def dynamics_deriv(
     model: 'PinnZooModel',
     x: npt.NDArray[np.float64],

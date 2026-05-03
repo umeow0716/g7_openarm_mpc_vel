@@ -22,6 +22,7 @@ class PinnZooModel:
             void kinematics_jacobian_wrapper(double* x, double* J);
             void forward_dynamics_wrapper(double* x_in, double* tau_in, double* vdot_out);
             void forward_dynamics_deriv_wrapper(double* x_in, double* tau_in, double* dvdot_dx_out, double* dvdout_dtau_out);
+            void inverse_dynamics_wrapper(double* x_in, double* vdot_in, double* tau_out);
             void dynamics_deriv_wrapper(double* x_in, double* tau_in, double* dxdot_dx_out, double* dxdout_dtau_out);
         """)
         
