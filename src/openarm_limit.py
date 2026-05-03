@@ -37,7 +37,7 @@ ARM_V_MIN = -ARM_V_MAX
 # Adjust these 3 values to match the real mobile base.
 # [vx, vy, wz]
 # -----------------------------------------------------------------------------
-BASE_V_MAX = np.array([1.0, 1.0, 1.0], dtype=np.float64)
+BASE_V_MAX = np.array([0.5, 0.5, 1.0], dtype=np.float64)
 BASE_V_MIN = -BASE_V_MAX
 
 # -----------------------------------------------------------------------------
