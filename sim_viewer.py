@@ -31,6 +31,19 @@ MIT_POS_DES_SHAPE = (26,)
 MIT_VEL_DES_SHAPE = (26,)
 MIT_TAU_DES_SHAPE = (26,)
 
+# MITCommand actuator order is not the same as raw MuJoCo qpos[7:] / qvel[6:].
+# Controller actuator order:
+#   [FL_steer, FR_steer, RL_steer, RR_steer,
+#    FL_wheel, FR_wheel, RL_wheel, RR_wheel, arms...]
+# MuJoCo joint order after the floating base is interleaved:
+#   [FL_steer, FL_wheel, FR_steer, FR_wheel,
+#    RL_steer, RL_wheel, RR_steer, RR_wheel, arms...]
+ACTUATOR_QPOS_IDX = np.array([7, 9, 11, 13, 8, 10, 12, 14, *range(15, 33)], dtype=np.int32)
+ACTUATOR_QVEL_IDX = np.array([6, 8, 10, 12, 7, 9, 11, 13, *range(14, 32)], dtype=np.int32)
+
+def wrap_to_pi(angle: np.ndarray | float) -> np.ndarray | float:
+    return (angle + np.pi) % (2.0 * np.pi) - np.pi
+
 def control_to_mj_qvel(u: np.ndarray, model: mujoco.MjModel) -> np.ndarray:
     """
     u = [vx, vy, wz, left_arm(9), right_arm(9)]  -> total 21 dims
@@ -137,8 +150,15 @@ def simulation_loop(x_shm_name: str, q_shm_name: str, v_shm_name: str, u_shm_nam
             # qvel_cmd = control_to_mj_qvel(_u, model)
             # data.qvel[:] = qvel_cmd.astype(np.float64) # type: ignore
             
-            qpos_err = mit_pos_des - data.qpos[7:]
-            qvel_err = mit_vel_des - data.qvel[6:]
+            qpos_act = data.qpos[ACTUATOR_QPOS_IDX]
+            qvel_act = data.qvel[ACTUATOR_QVEL_IDX]
+
+            qpos_err = mit_pos_des - qpos_act
+            # Steering joints are angular position controlled.  Wrap their
+            # position error so crossing +/-pi does not create a huge torque.
+            qpos_err[:4] = wrap_to_pi(qpos_err[:4])
+            qvel_err = mit_vel_des - qvel_act
+
             tau_ff = mit_tau_des
             tau_cmd = mit_kp * qpos_err + mit_kd * qvel_err + tau_ff
             data.ctrl[:] = tau_cmd.astype(np.float64) # type: ignore
