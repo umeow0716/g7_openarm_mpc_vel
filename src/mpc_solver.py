@@ -39,7 +39,7 @@ class OpenArmMPCSolver:
         self.dt = 0.01
         self.N = int(round(self.horizon / self.dt))
 
-        self.pos_weight = 400.0
+        self.pos_weight = 200.0
         self.rot_weight = 25.0
         
         self.u_weight = 10.0
@@ -54,7 +54,7 @@ class OpenArmMPCSolver:
         self._luu_const = self.R.copy()
         self._lux_zero = np.zeros((self.nu, self.nx), dtype=np.float64)
 
-        self._line_search_alphas = (1.0, 0.5, 0.25, 0.1, 0.05, 0.01)
+        self._line_search_alphas = (1.0, 0.5, 0.25, 0.1, 0.05, 0.01, 0.001)
         self._cost_tol = 1e-9
         self._reg = 1e-8
 
