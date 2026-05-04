@@ -40,9 +40,9 @@ class OpenArmMPCSolver:
         self.N = int(round(self.horizon / self.dt))
 
         self.pos_weight = 200.0
-        self.rot_weight = 25.0
+        self.rot_weight = 10.0
         
-        self.u_weight = 10.0
+        self.u_weight = 1.0
         self.base_u_weight = 40.0
 
         self.R_diag = np.full((self.nu,), self.u_weight, dtype=np.float64)
