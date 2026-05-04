@@ -1,9 +1,6 @@
-"""TSID-lite low-level whole-body controller for G7 OpenArm.
+"""TSID-lite low-level controller with base MIT feedback for G7 OpenArm.
 
-This file is intentionally a new controller file, not a replacement for
-``low_level_controller_wbc.py``.
-
-The controller keeps the same drop-in update API:
+Drop-in API:
 
     command = LowLevelController.update(qpos, qvel, u_des)
 
@@ -11,26 +8,19 @@ where ``u_des`` is the existing 21-D velocity-planner output:
 
     [base_vx, base_vy, base_wz, left_arm_vel(9), right_arm_vel(9)]
 
-The TSID part is an instantaneous inverse-dynamics QP.  It does not rollout a
-PID trajectory.  At each control tick it solves for generalized acceleration
-``vdot`` and actuator torque ``tau``:
-
-    minimize   || J_ee(q) vdot + Jdot_ee(q, v) v - xddot_ee_des ||^2
-             + || S_arm vdot - qddot_arm_des ||^2
-             + || tau ||^2 + || tau - tau_prev ||^2
-
-    subject to S_act (M(q) vdot + C(q, v)) - tau = 0
-               optional floating-base vdot = 0
-               tau_min <= tau <= tau_max
-
-Important limitation
+Runtime architecture
 --------------------
-This is TSID-lite, not full contact TSID.  The current generated library exposes
-``M``, ``C``, inverse dynamics, end-effector kinematics, task velocity, and the
-task-velocity Jacobian.  It does not expose wheel-ground contact / rolling
-constraint Jacobians.  Therefore the mobile base is still controlled with the
-stable original swerve PID path by default, while TSID is used for the upper body
-/ end-effector torque feed-forward.
+Base:
+    base_vx/vy/wz -> swerve steering angle + wheel velocity targets
+                  -> MITCommand kp/kd feedback in sim_viewer.py
+
+Arm:
+    TSID-lite inverse-dynamics QP -> tau_ff
+    optional MIT velocity feedback through kd
+
+The base no longer computes an internal PID torque into tau_ff.  Its PID/PD
+feedback is exposed through the MITCommand fields, so the simulator applies it
+against the current qpos/qvel state.
 """
 
 from __future__ import annotations
@@ -64,15 +54,6 @@ VelocityFrame = Literal["body", "world"]
 
 
 @dataclass(slots=True)
-class PIDGains:
-    """Simple PID gains for the base steering / wheel loops."""
-
-    kp: FloatArray | float = 0.0
-    ki: FloatArray | float = 0.0
-    kd: FloatArray | float = 0.0
-
-
-@dataclass(slots=True)
 class MITCommand:
     """MIT motor command arrays in actuator order."""
 
@@ -103,8 +84,6 @@ class TSIDQPWeights:
     """
 
     ee_pos_acc: float = 120.0
-    steering_acc: float = 10.0
-    wheel_acc: float = 5.0
     arm_acc: FloatArray | float = field(
         default_factory=lambda: np.array(
             [25.0, 25.0, 20.0, 20.0, 10.0, 10.0, 8.0, 5.0, 5.0] * 2,
@@ -115,10 +94,6 @@ class TSIDQPWeights:
     torque_rate: float = 1e-5
     vdot_regularization: float = 1e-6
 
-    # Keep this at 0.0 until contact forces lambda are included. Enforcing the
-    # floating-base rows without lambda makes the robot behave like a free flyer,
-    # not like a wheeled robot on the ground.
-    floating_base_dynamics: float = 0.0
 
 
 @dataclass(slots=True)
@@ -132,12 +107,8 @@ class TSIDLowLevelControllerConfig:
     rl_pos_xy_m: tuple[float, float] = (-0.198, 0.13)
     rr_pos_xy_m: tuple[float, float] = (-0.198, -0.13)
 
-    # These gains generate desired accelerations for the secondary joint-space
-    # task.  The primary Cartesian task is configured by ee_position_kp and
-    # ee_velocity_kd below.
-    steering_kp: float = 80.0
-    steering_kd: float = 12.0
-    wheel_kd: float = 0.0
+    # Arm desired acceleration gain used by the QP secondary task.
+    # Base gains are exposed directly as MITCommand kp/kd below.
     arm_kd: FloatArray | float = field(
         default_factory=lambda: np.array(
             [28.0, 28.0, 22.0, 22.0, 10.0, 10.0, 8.0, 4.0, 4.0] * 2,
@@ -157,24 +128,7 @@ class TSIDLowLevelControllerConfig:
 
     enable_arm_joint_task: bool = True
 
-    # Optional whole-command smoothing. Keep this at 0.0 when only the mobile
-    # base should be smoothed, so arm velocity commands remain responsive.
-    command_smoothing_alpha: float = 0.0
-
-    # Smooth only the mobile-base command [vx, vy, wz] before converting it to
-    # swerve steering / wheel targets. Larger alpha means smoother but slower.
-    base_command_smoothing_alpha: float = 0.10
-
-    # Hard velocity limits applied to the mobile-base command before smoothing.
-    base_vx_limit_m_s: float = 0.25
-    base_vy_limit_m_s: float = 0.25
-    base_wz_limit_rad_s: float = 0.50
-
-    # Slew-rate limits applied after smoothing. These are command acceleration
-    # limits, not physical dynamics constraints.
-    base_linear_acc_limit_m_s2: float = 0.35
-    base_angular_acc_limit_rad_s2: float = 0.80
-
+    command_smoothing_alpha: float = 0.10
     return_zero_command_on_nonfinite: bool = True
     min_module_speed_m_s: float = 1e-4
 
@@ -182,38 +136,29 @@ class TSIDLowLevelControllerConfig:
     wheel_vel_limit_rad_s: float = 30.0
     arm_vel_limit_rad_s: float = 2.0
 
-    steering_acc_limit_rad_s2: float = 80.0
-    wheel_acc_limit_rad_s2: float = 250.0
     arm_acc_limit_rad_s2: float = 80.0
 
     # The mid-level MPC command is already a velocity command. Differentiating
     # it with (v_des[k] - v_des[k-1]) / dt creates large acceleration spikes
-    # whenever the MPC solution changes. Keep this off by default so the WBC
-    # behaves like computed-torque velocity tracking instead of a jerky
-    # velocity-feedforward controller.
+    # whenever the MPC solution changes. Keep this off by default.
     arm_velocity_feedforward_gain: float = 0.0
-    wheel_velocity_feedforward_gain: float = 0.0
 
     # Match the direct qvel demo path in sim_viewer.py: the two gripper joints
     # per arm are not part of the end-effector task, so do not let numerical MPC
     # noise move them.
     zero_gripper_velocity_command: bool = True
 
-    # The swerve base is intentionally kept on the same stable PID path as
-    # src/low_level_controller_pid.py. The current WBC QP does not include
-    # wheel-ground contact force variables, so using inverse dynamics for the
-    # wheel/steering torques can inject unrealistic feed-forward torque and make
-    # the base shoot away. WBC feed-forward is used for the arms; base torque is
-    # produced by these original PID loops.
-    use_original_base_pid: bool = True
-    steering_position_pid: PIDGains = field(
-        default_factory=lambda: PIDGains(kp=1.0, ki=0.0, kd=0.001)
-    )
-    wheel_velocity_pid: PIDGains = field(
-        default_factory=lambda: PIDGains(kp=0.5, ki=0.0, kd=0.008)
-    )
-    steering_integral_limit: float = 0.8
-    wheel_integral_limit: float = 5.0
+    # Base feedback gains used directly by sim_viewer.py's MIT equation:
+    #     tau = kp * (pos_des - pos) + kd * (vel_des - vel) + tau_ff
+    # Steering uses position + velocity feedback. Wheels use velocity feedback.
+    base_steering_kp: float = 20.0
+    base_steering_kd: float = 0.02
+    base_wheel_kd: float = 5.0
+
+    # If the chassis command is essentially zero, disable base MIT feedback so
+    # steering and wheel motors do not keep hunting around numerical noise.
+    base_idle_linear_threshold_m_s: float = 1e-2
+    base_idle_angular_threshold_rad_s: float = 1e-2
 
     # Use the existing MITCommand path as the fast velocity feedback loop:
     #
@@ -223,7 +168,6 @@ class TSIDLowLevelControllerConfig:
     # PID controller: no integral term is used, and the QP supplies the gravity /
     # bias feed-forward torque.
     use_motor_velocity_feedback: bool = True
-    wheel_motor_kd: float = 0.0
     arm_motor_kd: FloatArray | float = field(
         default_factory=lambda: np.array(
             [8.0, 8.0, 6.0, 6.0, 2.0, 3.0, 1.5, 0.0, 0.0] * 2,
@@ -237,21 +181,11 @@ class TSIDLowLevelControllerConfig:
     bias_use_desired_velocity: bool = True
     bias_position_preview_s: float = 0.05
 
-    steering_tau_limit: float = 23.7
-    wheel_tau_limit: float = 8.0
     arm_tau_limit_scale: float = 1.0
 
     max_active_set_iter: int = 8
     qp_condition_regularization: float = 1e-9
 
-    # Important for the current project model. The QP does not yet include
-    # wheel-ground contact forces lambda. If the six floating-base
-    # accelerations are left free, the optimizer can use unreal base
-    # accelerations to cancel arm gravity and reduce tau. Locking them to
-    # zero inside the inverse-dynamics QP makes the actuator rows behave like
-    # a supported/fixed-base inverse dynamics calculation, so C(q, v) becomes
-    # real gravity/bias compensation for the arms.
-    constrain_floating_base_acceleration: bool = True
 
     weights: TSIDQPWeights = field(default_factory=TSIDQPWeights)
 
@@ -481,14 +415,8 @@ class LowLevelController:
 
         self.num_motors = len(self.motor_names)
         self._prev_u_des = np.zeros(OPENARM_NU, dtype=np.float64)
-        self._prev_base_cmd = np.zeros(3, dtype=np.float64)
-        self._prev_wheel_vel_des = np.zeros(4, dtype=np.float64)
         self._prev_arm_vel_des = np.zeros(18, dtype=np.float64)
         self._prev_tau = np.zeros(self.num_motors, dtype=np.float64)
-        self._prev_steering_error = np.zeros(4, dtype=np.float64)
-        self._prev_wheel_vel_error = np.zeros(4, dtype=np.float64)
-        self._steering_integral = np.zeros(4, dtype=np.float64)
-        self._wheel_integral = np.zeros(4, dtype=np.float64)
         self._initialized = False
         self._ee_pos_target: FloatArray | None = None
 
@@ -502,12 +430,11 @@ class LowLevelController:
             dtype=np.float64,
         )
 
-        self._tau_min = np.empty(self.num_motors, dtype=np.float64)
-        self._tau_max = np.empty(self.num_motors, dtype=np.float64)
-        self._tau_min[self._steer_act_idx] = -self.config.steering_tau_limit
-        self._tau_max[self._steer_act_idx] = self.config.steering_tau_limit
-        self._tau_min[self._wheel_act_idx] = -self.config.wheel_tau_limit
-        self._tau_max[self._wheel_act_idx] = self.config.wheel_tau_limit
+        # Only arm tau_ff is produced by this controller.  Base torque is
+        # generated later by sim_viewer.py from MIT kp/kd, so base tau_ff is
+        # clamped to zero here.
+        self._tau_min = np.zeros(self.num_motors, dtype=np.float64)
+        self._tau_max = np.zeros(self.num_motors, dtype=np.float64)
         arm_limit = self.config.arm_tau_limit_scale * self._arm_xml_tau_limit
         self._tau_min[self._arm_act_idx] = -arm_limit
         self._tau_max[self._arm_act_idx] = arm_limit
@@ -542,14 +469,8 @@ class LowLevelController:
 
     def reset(self) -> None:
         self._prev_u_des[:] = 0.0
-        self._prev_base_cmd[:] = 0.0
-        self._prev_wheel_vel_des[:] = 0.0
         self._prev_arm_vel_des[:] = 0.0
         self._prev_tau[:] = 0.0
-        self._prev_steering_error[:] = 0.0
-        self._prev_wheel_vel_error[:] = 0.0
-        self._steering_integral[:] = 0.0
-        self._wheel_integral[:] = 0.0
         self._initialized = False
 
     def _zero_command(self) -> MITCommand:
@@ -582,10 +503,20 @@ class LowLevelController:
 
         u_cmd = self._smooth_command(u_des)
 
+        base_command_is_idle = self._is_base_command_idle(u_cmd)
         steer_pos_des, steer_vel_des, wheel_vel_des = self._base_velocity_to_swerve_targets(
             qpos=qpos,
             u_cmd=u_cmd,
         )
+        if base_command_is_idle:
+            # Stop commanding the base when the requested chassis velocity is
+            # only numerical noise.  Gains are also disabled below, but keeping
+            # targets equal to the current state makes debug plots easier to
+            # read and prevents stale targets from being exposed.
+            steer_pos_des = qpos[self._steer_qpos_idx].copy()
+            steer_vel_des = np.zeros_like(steer_vel_des)
+            wheel_vel_des = np.zeros_like(wheel_vel_des)
+
         arm_vel_des = self._arm_velocity_command(u_cmd)
 
         if (
@@ -600,11 +531,7 @@ class LowLevelController:
             raise FloatingPointError("desired velocity targets contain non-finite values")
 
         desired_act_acc = self._build_desired_actuator_acceleration(
-            qpos=qpos,
             qvel=qvel,
-            steer_pos_des=steer_pos_des,
-            steer_vel_des=steer_vel_des,
-            wheel_vel_des=wheel_vel_des,
             arm_vel_des=arm_vel_des,
         )
 
@@ -642,32 +569,13 @@ class LowLevelController:
                 return self._zero_command()
             raise FloatingPointError("QP torque output contains non-finite values")
 
-        if self.config.use_original_base_pid:
-            tau_act[self._steer_act_idx] = self._position_pid(
-                pos_now=qpos[self._steer_qpos_idx],
-                vel_now=qvel[self._steer_qvel_idx],
-                pos_des=steer_pos_des,
-                vel_des=steer_vel_des,
-                gains=self.config.steering_position_pid,
-                integral=self._steering_integral,
-                prev_error=self._prev_steering_error,
-                integral_limit=self.config.steering_integral_limit,
-            )
-            tau_act[self._wheel_act_idx] = self._velocity_pid(
-                vel_now=qvel[self._wheel_qvel_idx],
-                vel_des=wheel_vel_des,
-                gains=self.config.wheel_velocity_pid,
-                integral=self._wheel_integral,
-                prev_error=self._prev_wheel_vel_error,
-                integral_limit=self.config.wheel_integral_limit,
-            )
-            # sim_viewer.py adds MIT kp/kd feedback after reading this command.
-            # Keep the base command fully bounded here and leave wheel_motor_kd
-            # at zero by default, otherwise the final torque can exceed the
-            # base actuator ranges before MuJoCo clamps it.
-            tau_act = np.clip(tau_act, self._tau_min, self._tau_max)
+        # Base is controlled by MIT kp/kd feedback in the returned command.
+        # Do not precompute base PID torque into tau_ff; otherwise the gains are
+        # evaluated against stale state before sim_viewer.py applies the command.
+        tau_act[self._steer_act_idx] = 0.0
+        tau_act[self._wheel_act_idx] = 0.0
+        tau_act = np.clip(tau_act, self._tau_min, self._tau_max)
 
-        self._prev_wheel_vel_des[:] = wheel_vel_des
         self._prev_arm_vel_des[:] = arm_vel_des
         self._prev_tau[:] = tau_act
 
@@ -683,9 +591,15 @@ class LowLevelController:
         pos_des[self._arm_act_idx] = qpos[self._arm_qpos_idx]
         vel_des[self._arm_act_idx] = arm_vel_des
 
+        # Base MIT feedback is active only when the chassis command is not
+        # effectively zero.  Near zero, leave kp/kd at zero so steering and
+        # wheel motors are not controlled by tiny numerical commands.
+        if not base_command_is_idle:
+            kp[self._steer_act_idx] = self.config.base_steering_kp
+            kd[self._steer_act_idx] = self.config.base_steering_kd
+            kd[self._wheel_act_idx] = self.config.base_wheel_kd
+
         if self.config.use_motor_velocity_feedback:
-            if not self.config.use_original_base_pid:
-                kd[self._wheel_act_idx] = self.config.wheel_motor_kd
             kd[self._arm_act_idx] = self.config.arm_motor_kd
 
         return MITCommand(
@@ -715,82 +629,33 @@ class LowLevelController:
             )
 
         if self.config.bias_use_desired_velocity:
-            # When the base is controlled by the original PID path, do not feed
-            # desired wheel speeds into the inverse-dynamics bias calculation.
-            # Wheel-ground contact forces are not modeled in the QP, so those
-            # terms are not reliable feed-forward for the base.
-            if not self.config.use_original_base_pid:
-                qvel_ff[self._steer_qvel_idx] = steer_vel_des
-                qvel_ff[self._wheel_qvel_idx] = wheel_vel_des
+            # Only preview arm velocity for the arm/WBC feed-forward term.
+            # Base steering and wheel tracking are handled by MIT kp/kd.
             qvel_ff[self._arm_qvel_idx] = arm_vel_des
 
         return self.dyn.make_state(qpos_ff, qvel_ff)
 
     def _smooth_command(self, u_des: FloatArray) -> FloatArray:
-        """Smooth planner commands, with extra filtering for base vx/vy/wz.
-
-        ``command_smoothing_alpha`` still performs the original full 21-D
-        smoothing.  The new base-specific path then limits and smooths only
-        [base_vx, base_vy, base_wz], so the arm velocity command can stay fast
-        while the swerve base receives gentler velocity targets.
-        """
-        full_alpha = float(np.clip(self.config.command_smoothing_alpha, 0.0, 0.999))
-        base_indices = np.array(
-            [OPENARM_U_BASE_VX, OPENARM_U_BASE_VY, OPENARM_U_BASE_WZ],
-            dtype=np.int32,
-        )
-
+        alpha = float(np.clip(self.config.command_smoothing_alpha, 0.0, 0.999))
         if not self._initialized:
             self._prev_u_des[:] = u_des
-            self._prev_base_cmd[:] = u_des[base_indices]
             self._initialized = True
             return u_des.copy()
 
-        u_cmd = full_alpha * self._prev_u_des + (1.0 - full_alpha) * u_des
-        base_raw = u_cmd[base_indices].astype(np.float64, copy=True)
-
-        # 1) Hard-limit the base command so a far target cannot request a huge
-        # instantaneous chassis velocity.
-        base_raw[0] = np.clip(
-            base_raw[0],
-            -self.config.base_vx_limit_m_s,
-            self.config.base_vx_limit_m_s,
-        )
-        base_raw[1] = np.clip(
-            base_raw[1],
-            -self.config.base_vy_limit_m_s,
-            self.config.base_vy_limit_m_s,
-        )
-        base_raw[2] = np.clip(
-            base_raw[2],
-            -self.config.base_wz_limit_rad_s,
-            self.config.base_wz_limit_rad_s,
-        )
-
-        # 2) First-order low-pass smoothing. Higher alpha = smoother/slower.
-        base_alpha = float(np.clip(self.config.base_command_smoothing_alpha, 0.0, 0.999))
-        base_smoothed = base_alpha * self._prev_base_cmd + (1.0 - base_alpha) * base_raw
-
-        # 3) Slew-rate limit, so vx/vy/wz cannot jump too much in one tick.
-        dt = max(self.config.dt, 1e-9)
-        max_delta = np.array(
-            [
-                self.config.base_linear_acc_limit_m_s2 * dt,
-                self.config.base_linear_acc_limit_m_s2 * dt,
-                self.config.base_angular_acc_limit_rad_s2 * dt,
-            ],
-            dtype=np.float64,
-        )
-        base_cmd = self._prev_base_cmd + np.clip(
-            base_smoothed - self._prev_base_cmd,
-            -max_delta,
-            max_delta,
-        )
-
-        u_cmd[base_indices] = base_cmd
-        self._prev_base_cmd[:] = base_cmd
+        u_cmd = alpha * self._prev_u_des + (1.0 - alpha) * u_des
         self._prev_u_des[:] = u_cmd
         return u_cmd
+
+    def _is_base_command_idle(self, u_cmd: FloatArray) -> bool:
+        linear_speed = float(np.hypot(
+            u_cmd[OPENARM_U_BASE_VX],
+            u_cmd[OPENARM_U_BASE_VY],
+        ))
+        angular_speed = abs(float(u_cmd[OPENARM_U_BASE_WZ]))
+        return (
+            linear_speed < self.config.base_idle_linear_threshold_m_s
+            and angular_speed < self.config.base_idle_angular_threshold_rad_s
+        )
 
     def _base_velocity_to_swerve_targets(
         self,
@@ -868,38 +733,10 @@ class LowLevelController:
 
     def _build_desired_actuator_acceleration(
         self,
-        qpos: FloatArray,
         qvel: FloatArray,
-        steer_pos_des: FloatArray,
-        steer_vel_des: FloatArray,
-        wheel_vel_des: FloatArray,
         arm_vel_des: FloatArray,
     ) -> FloatArray:
         acc = np.zeros(self.num_motors, dtype=np.float64)
-
-        steering_pos_err = self._wrap_to_pi(steer_pos_des - qpos[self._steer_qpos_idx])
-        steering_vel_err = steer_vel_des - qvel[self._steer_qvel_idx]
-        acc[self._steer_act_idx] = (
-            self.config.steering_kp * steering_pos_err
-            + self.config.steering_kd * steering_vel_err
-        )
-        acc[self._steer_act_idx] = np.clip(
-            acc[self._steer_act_idx],
-            -self.config.steering_acc_limit_rad_s2,
-            self.config.steering_acc_limit_rad_s2,
-        )
-
-        wheel_acc_ff = (wheel_vel_des - self._prev_wheel_vel_des) / max(self.config.dt, 1e-9)
-        wheel_vel_err = wheel_vel_des - qvel[self._wheel_qvel_idx]
-        acc[self._wheel_act_idx] = (
-            self.config.wheel_velocity_feedforward_gain * wheel_acc_ff
-            + self.config.wheel_kd * wheel_vel_err
-        )
-        acc[self._wheel_act_idx] = np.clip(
-            acc[self._wheel_act_idx],
-            -self.config.wheel_acc_limit_rad_s2,
-            self.config.wheel_acc_limit_rad_s2,
-        )
 
         arm_acc_ff = (arm_vel_des - self._prev_arm_vel_des) / max(self.config.dt, 1e-9)
         arm_vel_err = arm_vel_des - qvel[self._arm_qvel_idx]
@@ -1056,12 +893,6 @@ class LowLevelController:
 
         hessian[:nv, :nv] += self.config.weights.vdot_regularization * np.eye(nv, dtype=np.float64)
 
-        if self.config.weights.floating_base_dynamics > 0.0:
-            mass_base = mass_matrix[self._floating_v_idx, :]
-            bias_base = bias_force[self._floating_v_idx]
-            w_base = self.config.weights.floating_base_dynamics
-            hessian[:nv, :nv] += w_base * (mass_base.T @ mass_base)
-            gradient[:nv] += w_base * (mass_base.T @ bias_base)
 
         hessian += self.config.qp_condition_regularization * np.eye(nvar, dtype=np.float64)
         hessian = 0.5 * (hessian + hessian.T)
@@ -1072,17 +903,6 @@ class LowLevelController:
         equality[:, nv:] = -np.eye(na, dtype=np.float64)
         equality_rhs = -bias_act
 
-        if self.config.constrain_floating_base_acceleration:
-            base_acc_equality = np.zeros((len(self._floating_v_idx), nvar), dtype=np.float64)
-            base_acc_equality[:, self._floating_v_idx] = np.eye(
-                len(self._floating_v_idx),
-                dtype=np.float64,
-            )
-            equality = np.vstack([equality, base_acc_equality])
-            equality_rhs = np.concatenate([
-                equality_rhs,
-                np.zeros(len(self._floating_v_idx), dtype=np.float64),
-            ])
 
         active_tau_idx: list[int] = []
         active_tau_value: list[float] = []
@@ -1153,63 +973,9 @@ class LowLevelController:
         return sol[:nvar]
 
     def _acceleration_weight_diag(self) -> FloatArray:
-        weights = np.empty(self.num_motors, dtype=np.float64)
-        if self.config.use_original_base_pid:
-            # Base tracking is handled by the stable original PID path.
-            # Do not let base acceleration objectives shape the WBC feed-forward.
-            weights[self._steer_act_idx] = 0.0
-            weights[self._wheel_act_idx] = 0.0
-        else:
-            weights[self._steer_act_idx] = self.config.weights.steering_acc
-            weights[self._wheel_act_idx] = self.config.weights.wheel_acc
+        weights = np.zeros(self.num_motors, dtype=np.float64)
         weights[self._arm_act_idx] = self.config.weights.arm_acc
         return weights
-
-    def _position_pid(
-        self,
-        pos_now: FloatArray,
-        vel_now: FloatArray,
-        pos_des: FloatArray,
-        vel_des: FloatArray,
-        gains: PIDGains,
-        integral: FloatArray,
-        prev_error: FloatArray,
-        integral_limit: float,
-    ) -> FloatArray:
-        error = self._wrap_to_pi(pos_des - pos_now)
-        error_rate = vel_des - vel_now
-
-        if not np.isfinite(integral).all():
-            integral.fill(0.0)
-
-        integral += error * self.config.dt
-        np.clip(integral, -integral_limit, integral_limit, out=integral)
-
-        tau = gains.kp * error + gains.ki * integral + gains.kd * error_rate
-        prev_error[:] = error
-        return np.asarray(tau, dtype=np.float64)
-
-    def _velocity_pid(
-        self,
-        vel_now: FloatArray,
-        vel_des: FloatArray,
-        gains: PIDGains,
-        integral: FloatArray,
-        prev_error: FloatArray,
-        integral_limit: float,
-    ) -> FloatArray:
-        error = vel_des - vel_now
-
-        if not np.isfinite(integral).all():
-            integral.fill(0.0)
-
-        integral += error * self.config.dt
-        np.clip(integral, -integral_limit, integral_limit, out=integral)
-
-        error_dot = (error - prev_error) / max(self.config.dt, 1e-9)
-        tau = gains.kp * error + gains.ki * integral + gains.kd * error_dot
-        prev_error[:] = error
-        return np.asarray(tau, dtype=np.float64)
 
     @staticmethod
     def _wrap_to_pi(angle: FloatArray | float) -> FloatArray | float:
@@ -1229,8 +995,3 @@ class LowLevelController:
             target_angle = float(self._wrap_to_pi(raw_angle))
             target_wheel_vel = raw_wheel_vel
         return target_angle, target_wheel_vel
-
-
-# Backward-friendly alias for explicit imports.
-TSIDLowLevelController = LowLevelController
-
