@@ -6,7 +6,7 @@ import mujoco
 import mujoco.viewer
 import numpy as np
 import openarm_can as oa
-from openarm_can import MITParam
+from openarm_can import MITParam, PosVelParam
 
 from src.low_level_controller_wbc import LowLevelController
 from src.mpc_solver import OpenArmMPCSolver
@@ -132,7 +132,6 @@ def simulation_loop(q_shm_name: str, left_target_pos_shm_name: str, left_target_
         while viewer.is_running():
             cycle_end_time = time.time() + model.opt.timestep
             
-            # load qpos from x_shm
             qpos = np.ndarray(Q_SHARED_SHAPE, dtype=DTYPE, buffer=q_shm.buf)
             data.qpos[:] = qpos.copy() # type: ignore
             mujoco.mj_step(model, data)
@@ -181,6 +180,7 @@ def mid_level_control_loop(x_shm_name: str, u_shm_name: str, left_target_pos_shm
             ]).astype(np.float64)
 
             x = np.ndarray(X_SHARED_SHAPE, dtype=DTYPE, buffer=x_shm.buf)
+            print(x)
 
             _, U_sol, success = mpc.solve_slq(
                 x0=x,
@@ -190,12 +190,12 @@ def mid_level_control_loop(x_shm_name: str, u_shm_name: str, left_target_pos_shm
                 shift_warm_start=True,
             )
 
-            if not success:
-                U_init[:] = 0.0
-                u_cmd[:] = 0.0
-            else:
-                U_init = U_sol.copy()
-                u_cmd = U_sol[0].copy()
+            # if not success:
+            #     U_init[:] = 0.0
+            #     u_cmd[:] = 0.0
+            # else:
+            U_init = U_sol.copy()
+            u_cmd = U_sol[0].copy()
             
             step_end = time.time()
             dt_solve = step_end - step_start
@@ -231,7 +231,8 @@ def low_level_control_loop(q_shm_name: str, v_shm_name: str, u_shm_name: str, mi
         mit_tau_des_shm.buf[:] = cmd.tau_ff.astype(DTYPE).tobytes() # type: ignore
         time.sleep(0.01)
 
-def control_loop(q_shm_name: str, v_shm_name: str, mit_kp_shm_name: str, mit_kd_shm_name: str, mit_pos_des_shm_name: str, mit_vel_des_shm_name: str, mit_tau_des_shm_name: str):
+def control_loop(x_shm_name: str, q_shm_name: str, v_shm_name: str, mit_kp_shm_name: str, mit_kd_shm_name: str, mit_pos_des_shm_name: str, mit_vel_des_shm_name: str, mit_tau_des_shm_name: str):
+    x_shm = shared_memory.SharedMemory(name=x_shm_name)
     q_shm = shared_memory.SharedMemory(name=q_shm_name)
     v_shm = shared_memory.SharedMemory(name=v_shm_name)
     
@@ -245,19 +246,45 @@ def control_loop(q_shm_name: str, v_shm_name: str, mit_kp_shm_name: str, mit_kd_
     right_arm = oa.OpenArm("can0", True)
     left_arm  = oa.OpenArm("can1", True)
     
+    motor_types = [
+        oa.MotorType.DM8009, oa.MotorType.DM8009,
+        oa.MotorType.DM4340, oa.MotorType.DM4340,
+        oa.MotorType.DM4310, oa.MotorType.DM4310, oa.MotorType.DM4310
+    ]
+    send_ids = [ 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07 ]
+    recv_ids = [ 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17 ]
+    
+    right_arm.init_arm_motors(motor_types, send_ids, recv_ids)
+    left_arm.init_arm_motors(motor_types, send_ids, recv_ids)
+    
     right_arm.enable_all()
     left_arm.enable_all()
-    time.sleep(1 * 1e-3)
+    time.sleep(5 * 1e-3)
     right_arm.recv_all()
     left_arm.recv_all()
     
     right_arm.set_callback_mode_all(oa.CallbackMode.STATE)
     left_arm.set_callback_mode_all(oa.CallbackMode.STATE)
-    time.sleep(1 * 1e-3)
+    time.sleep(5 * 1e-3)
     right_arm.recv_all()
     left_arm.recv_all()
     
-    KDs = [6.0, 6.0, 6.0, 6.0, 2.0, 1.5, 2.0]
+    right_arm.get_arm().set_control_mode_all(oa.ControlMode.MIT)
+    left_arm.get_arm().set_control_mode_all(oa.ControlMode.MIT)
+    time.sleep(5 * 1e-3)
+    right_arm.recv_all()
+    left_arm.recv_all()
+    
+    RIGHT_KPS = [300.0, 240.0, 150.0, 150.0, 30.0, 50.0, 30.0]
+    RIGHT_KDS = [5.0, 2.5, 1.2, 1.2, 0.5, 0.3, 0.5]
+    
+    LEFT_KPS = [300.0, 240.0, 150.0, 150.0, 30.0, 50.0, 30.0]
+    LEFT_KDS = [5.0, 2.5, 1.2, 1.2, 0.5, 0.3, 0.5]
+    
+    left_reversed_ids = [0, 1, 3, 5, 6]
+    right_reversed_ids = [1, 3, 5]
+    
+    start_time = time.time()
 
     while True:
         mit_kp = np.ndarray(MIT_KP_SHAPE, dtype=DTYPE, buffer=mit_kp_shm.buf)
@@ -265,31 +292,70 @@ def control_loop(q_shm_name: str, v_shm_name: str, mit_kp_shm_name: str, mit_kd_
         mit_pos_des = np.ndarray(MIT_POS_DES_SHAPE, dtype=DTYPE, buffer=mit_pos_des_shm.buf)
         mit_vel_des = np.ndarray(MIT_VEL_DES_SHAPE, dtype=DTYPE, buffer=mit_vel_des_shm.buf)
         mit_tau_des = np.ndarray(MIT_TAU_DES_SHAPE, dtype=DTYPE, buffer=mit_tau_des_shm.buf)
+        
+        q = np.ndarray(Q_SHARED_SHAPE, dtype=DTYPE, buffer=q_shm.buf)
+        v = np.ndarray(V_SHARED_SHAPE, dtype=DTYPE, buffer=v_shm.buf)
+        
+        mit_pos_des = np.zeros(MIT_POS_DES_SHAPE, dtype=DTYPE)
+        mit_pos_des[8:8+7] = q[7+8:7+8+7] + mit_vel_des[8:8+7] * 0.05
+        mit_pos_des[8+9:8+9+7] = q[7+8+9:7+8+9+7] + mit_vel_des[8+9:8+9+7] * 0.05
+        
+        for idx in left_reversed_ids:
+            mit_pos_des[8+idx] *= -1.0
+            mit_vel_des[8+idx] *= -1.0
+            mit_tau_des[8+idx] *= -1.0
+        
+        for idx in right_reversed_ids:
+            mit_pos_des[8+9+idx] *= -1.0
+            mit_vel_des[8+9+idx] *= -1.0
+            mit_tau_des[8+9+idx] *= -1.0
 
-        right_cmds = [
-            MITParam(q=mit_pos_des[8+i], dq=mit_vel_des[8+i], kp=mit_kp[8+i], kd=KDs[i], tau=mit_tau_des[8+i])
-            for i in range(8)
-        ]
-        right_arm.get_arm().mit_control_all(right_cmds)
-        
         left_cmds = [
-            MITParam(q=mit_pos_des[8+9+i], dq=mit_vel_des[8+9+i], kp=mit_kp[8+9+i], kd=KDs[i], tau=mit_tau_des[8+9+i])
-            for i in range(8)
+            MITParam(q=float(mit_pos_des[8+i]), dq=float(mit_vel_des[8+i]), kp=float(LEFT_KPS[i]), kd=float(LEFT_KDS[i]), tau=float(mit_tau_des[8+i]) * 0.5)
+            for i in range(7)
         ]
-        left_arm.get_arm().mit_control_all(left_cmds)
+        if time.time() - start_time > 3.0:
+            left_arm.get_arm().mit_control_all(left_cmds)
         
+        right_cmds = [
+            MITParam(q=float(mit_pos_des[8+9+i]), dq=float(mit_vel_des[8+9+i]), kp=float(RIGHT_KPS[i]), kd=float(RIGHT_KDS[i]), tau=float(mit_tau_des[8+9+i]) * 0.5)
+            for i in range(7)
+        ]
+        if time.time() - start_time > 3.0:
+            right_arm.get_arm().mit_control_all(right_cmds)
+        
+        time.sleep(10 * 1e-3)
         right_arm.refresh_all()
         left_arm.refresh_all()
-        time.sleep(1 * 1e-3)
+        time.sleep(10 * 1e-3)
         right_arm.recv_all()
         left_arm.recv_all()
         
-        q_shm.buf[8:15] = right_arm.get_arm().q.copy().astype(DTYPE).tobytes() # type: ignore
-        v_shm.buf[8:15] = right_arm.get_arm().dq.copy().astype(DTYPE).tobytes() # type: ignore
-        q_shm.buf[17:24] = left_arm.get_arm().q.copy().astype(DTYPE).tobytes() # type: ignore
-        v_shm.buf[17:24] = left_arm.get_arm().dq.copy().astype(DTYPE).tobytes() # type: ignore
-
-        time.sleep(0.01)
+        q = np.zeros(Q_SHARED_SHAPE, dtype=DTYPE)
+        v = np.zeros(V_SHARED_SHAPE, dtype=DTYPE)
+        
+        q[2] = 0.2
+        q[3] = 1.0
+        
+        motors = left_arm.get_arm().get_motors()
+        for i in range(7):
+            q[7+8+i] = motors[i].get_position()
+            v[6+8+i] = motors[i].get_velocity()
+            if i in left_reversed_ids:
+                q[7+8+i] *= -1.0
+                v[6+8+i] *= -1.0
+        
+        motors = right_arm.get_arm().get_motors()
+        for i in range(7):
+            q[7+8+9+i] = motors[i].get_position()
+            v[6+8+9+i] = motors[i].get_velocity()
+            if i in right_reversed_ids:
+                q[7+8+9+i] *= -1.0
+                v[6+8+9+i] *= -1.0
+        
+        x_shm.buf[:] = q.copy().tobytes() # type: ignore
+        q_shm.buf[:] = q.copy().tobytes() # type: ignore
+        v_shm.buf[:] = v.copy().tobytes() # type: ignore
     
 
 def main():
@@ -318,7 +384,7 @@ def main():
     process3.start()
     process4 = Process(target=low_level_control_loop, args=(q_shm.name, v_shm.name, u_shm.name, mit_kp_shm.name, mit_kd_shm.name, mit_pos_des_shm.name, mit_vel_des_shm.name, mit_tau_des_shm.name))
     process4.start()
-    process5 = Process(target=control_loop, args=(q_shm.name, v_shm.name, mit_kp_shm.name, mit_kd_shm.name, mit_pos_des_shm.name, mit_vel_des_shm.name, mit_tau_des_shm.name))
+    process5 = Process(target=control_loop, args=(x_shm.name, q_shm.name, v_shm.name, mit_kp_shm.name, mit_kd_shm.name, mit_pos_des_shm.name, mit_vel_des_shm.name, mit_tau_des_shm.name))
     process5.start()
     
     def onexit():
@@ -327,6 +393,7 @@ def main():
         process2.join()
         process3.terminate()
         process4.terminate()
+        process5.terminate()
         x_shm.close()
         q_shm.close()
         v_shm.close()

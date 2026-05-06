@@ -39,7 +39,7 @@ class OpenArmMPCSolver:
         self.dt = 0.01
         self.N = int(round(self.horizon / self.dt))
 
-        self.pos_weight = 200.0
+        self.pos_weight = 150.0
         self.rot_weight = 10.0
         
         self.u_weight = 1.0
