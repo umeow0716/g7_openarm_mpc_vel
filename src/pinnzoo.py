@@ -99,6 +99,22 @@ def dynamics_deriv(
     )
 
     return dxdot_dx, dxdot_dtau
+
+def M_func(
+    model: 'PinnZooModel',
+    x_in: npt.NDArray[np.float64],
+):
+    M_out = np.empty((model.nv, model.nv), dtype=np.float64)
+    
+    p_x_in = model.ffi.cast("double*", x_in.ctypes.data)
+    p_M_out = model.ffi.cast("double*", M_out.ctypes.data)
+
+    model.lib.M_func_wrapper(  # type: ignore
+        p_x_in,
+        p_M_out,
+    )
+    
+    return M_out
     
 def zero_state(model: 'PinnZooModel'):
     return np.zeros(model.nx, dtype=np.float64)

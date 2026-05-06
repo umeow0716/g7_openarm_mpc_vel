@@ -18,6 +18,7 @@ class PinnZooModel:
             extern const char* vel_names[];
             extern const char* torque_names[];
             extern const char* kinematics_bodies[];
+            void M_func_wrapper(double* x_in, double* M_out);
             void kinematics_wrapper(double* x, double* locs);
             void kinematics_jacobian_wrapper(double* x, double* J);
             void forward_dynamics_wrapper(double* x_in, double* tau_in, double* vdot_out);
