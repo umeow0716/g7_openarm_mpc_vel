@@ -280,8 +280,7 @@ class LowLevelController:
         ] * 2)
         
         is_stuck = np.abs(u_des[3:]) > 3e-2
-        print(is_stuck)
-        
+
         tau_bias = tau0 * is_stuck * np.sign(u_des[3:])
         tau_act[8:] += tau_bias
         
