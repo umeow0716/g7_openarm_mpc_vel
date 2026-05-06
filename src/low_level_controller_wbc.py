@@ -6,7 +6,9 @@ import os
 
 import numpy as np
 import numpy.typing as npt
-from cffi import FFI
+
+from .pinnzoo_binding import PinnZooModel
+from .pinnzoo import M_func, inverse_dynamics
 
 from .openarm_idx import (
     OPENARM_NQ,
@@ -104,115 +106,6 @@ class TSIDLowLevelControllerConfig:
             dtype=np.float64,
         )
     )
-
-
-class WholeBodyDynamicsLibrary:
-    """Minimal cffi binding for functions exposed by wrapper.c."""
-
-    def __init__(self, lib_path: str):
-        if not os.path.exists(lib_path):
-            raise FileNotFoundError(f"file `{lib_path}` not found")
-
-        self.lib_path = lib_path
-        self.ffi = FFI()
-        self.ffi.cdef(
-            """
-            extern const char* config_names[];
-            extern const char* vel_names[];
-            extern const char* torque_names[];
-            extern const char* kinematics_bodies[];
-            void M_func_wrapper(double* x_in, double* M_out);
-            void C_func_wrapper(double* x_in, double* C_out);
-            void velocity_kinematics_wrapper(double* x_in, double* E_out);
-            void inverse_dynamics_wrapper(double* x_in, double* vdot_in, double* tau_out);
-            void kinematics_wrapper(double* x_in, double* locs_out);
-            void kinematics_velocity_wrapper(double* x_in, double* locs_dot_out);
-            void kinematics_velocity_jacobian_wrapper(double* x_in, double* J_dot_out);
-            """
-        )
-        self.lib = self.ffi.dlopen(os.path.abspath(lib_path))
-
-        self.nq = self._get_c_array_len(self.lib.config_names)  # type: ignore[attr-defined]
-        self.nv = self._get_c_array_len(self.lib.vel_names)  # type: ignore[attr-defined]
-        self.ntorque_names = self._get_c_array_len(self.lib.torque_names)  # type: ignore[attr-defined]
-        self.bodies_count = self._get_c_array_len(self.lib.kinematics_bodies)  # type: ignore[attr-defined]
-        self.kinematics_size = 7 * self.bodies_count
-        self.nx = self.nq + self.nv
-
-        if self.nq != OPENARM_NQ or self.nv != OPENARM_NV:
-            raise ValueError(
-                f"Unexpected dynamics size: nq={self.nq}, nv={self.nv}; "
-                f"expected nq={OPENARM_NQ}, nv={OPENARM_NV}"
-            )
-
-    def _get_c_array_len(self, ptr) -> int:
-        count = 0
-        while ptr[count] != self.ffi.NULL:
-            count += 1
-        return count
-
-    def make_state(self, qpos: FloatArray, qvel: FloatArray) -> FloatArray:
-        x = np.empty(self.nx, dtype=np.float64)
-        x[: self.nq] = qpos
-        x[self.nq :] = qvel
-        return x
-
-    def mass_matrix(self, x: FloatArray) -> FloatArray:
-        out = np.empty(self.nv * self.nv, dtype=np.float64)
-        self.lib.M_func_wrapper(  # type: ignore[attr-defined]
-            self.ffi.cast("double*", x.ctypes.data),
-            self.ffi.cast("double*", out.ctypes.data),
-        )
-        return out.reshape((self.nv, self.nv), order="F")
-
-    def bias_force(self, x: FloatArray) -> FloatArray:
-        out = np.empty(self.nv, dtype=np.float64)
-        self.lib.C_func_wrapper(  # type: ignore[attr-defined]
-            self.ffi.cast("double*", x.ctypes.data),
-            self.ffi.cast("double*", out.ctypes.data),
-        )
-        return out
-
-    def velocity_kinematics_matrix(self, x: FloatArray) -> FloatArray:
-        out = np.empty(self.nq * self.nv, dtype=np.float64)
-        self.lib.velocity_kinematics_wrapper(  # type: ignore[attr-defined]
-            self.ffi.cast("double*", x.ctypes.data),
-            self.ffi.cast("double*", out.ctypes.data),
-        )
-        return out.reshape((self.nq, self.nv), order="F")
-
-    def kinematics(self, x: FloatArray) -> FloatArray:
-        out = np.empty(self.kinematics_size, dtype=np.float64)
-        self.lib.kinematics_wrapper(  # type: ignore[attr-defined]
-            self.ffi.cast("double*", x.ctypes.data),
-            self.ffi.cast("double*", out.ctypes.data),
-        )
-        return out
-
-    def kinematics_velocity(self, x: FloatArray) -> FloatArray:
-        out = np.empty(self.kinematics_size, dtype=np.float64)
-        self.lib.kinematics_velocity_wrapper(  # type: ignore[attr-defined]
-            self.ffi.cast("double*", x.ctypes.data),
-            self.ffi.cast("double*", out.ctypes.data),
-        )
-        return out
-
-    def kinematics_velocity_jacobian(self, x: FloatArray) -> FloatArray:
-        out = np.empty(self.kinematics_size * self.nx, dtype=np.float64)
-        self.lib.kinematics_velocity_jacobian_wrapper(  # type: ignore[attr-defined]
-            self.ffi.cast("double*", x.ctypes.data),
-            self.ffi.cast("double*", out.ctypes.data),
-        )
-        return out.reshape((self.kinematics_size, self.nx), order="F")
-
-    def inverse_dynamics_generalized(self, x: FloatArray, vdot: FloatArray) -> FloatArray:
-        out = np.empty(self.nv, dtype=np.float64)
-        self.lib.inverse_dynamics_wrapper(  # type: ignore[attr-defined]
-            self.ffi.cast("double*", x.ctypes.data),
-            self.ffi.cast("double*", vdot.ctypes.data),
-            self.ffi.cast("double*", out.ctypes.data),
-        )
-        return out
 
 
 class LowLevelController:
@@ -327,7 +220,7 @@ class LowLevelController:
     ) -> None:
         self.config = config if config is not None else TSIDLowLevelControllerConfig()
         self.lib_path = lib_path
-        self.dyn = WholeBodyDynamicsLibrary(lib_path)
+        self.model = PinnZooModel(lib_path)
 
         self.num_motors = len(self.motor_names)
         self._prev_u_des = np.zeros(OPENARM_NU, dtype=np.float64)
@@ -381,7 +274,7 @@ class LowLevelController:
         """
 
         # 取得 mass matrix
-        M = self.dyn.mass_matrix(x)
+        M = M_func(self.model, x)
 
         # 取 diagonal inertia
         M_diag = np.diag(M)
@@ -496,10 +389,12 @@ class LowLevelController:
             arm_vel_des=u_des[3:],
         )
         
-        desired_u = np.concatenate([np.zeros(6, dtype=np.float64), desired_act_acc])
-        tau_act = self.dyn.inverse_dynamics_generalized(
-            x=self.dyn.make_state(qpos, qvel),
-            vdot=desired_u,
+        x = np.concatenate([qpos, qvel])
+        desired_vdot = np.concatenate([np.zeros(6, dtype=np.float64), desired_act_acc])
+        tau_act = inverse_dynamics(
+            model=self.model,
+            x=x,
+            vdot=desired_vdot,
         )[6:]
         
         tau0 = np.array([
@@ -661,10 +556,7 @@ class LowLevelController:
         arm_acc_ff = (arm_vel_des - self._prev_arm_vel_des) / max(self.config.dt, 1e-9)
         arm_vel_err = arm_vel_des - qvel[self._arm_qvel_idx]
         
-        x = self.dyn.make_state(
-                qpos=qpos,
-                qvel=qvel,
-        )
+        x = np.concatenate([qpos, qvel])
         
         KDs = self.compute_kd_from_mass_matrix(
             x,
