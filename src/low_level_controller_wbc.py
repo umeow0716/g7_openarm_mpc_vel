@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Literal
-import os
 
 import numpy as np
 import numpy.typing as npt
@@ -51,15 +50,6 @@ class LowLevelControllerConfig:
     fr_pos_xy_m: tuple[float, float] = (0.198, -0.13)
     rl_pos_xy_m: tuple[float, float] = (-0.198, 0.13)
     rr_pos_xy_m: tuple[float, float] = (-0.198, -0.13)
-
-    # Arm desired acceleration gain used by the QP secondary task.
-    # Base gains are exposed directly as MITCommand kp/kd below.
-    arm_kd: FloatArray | float = field(
-        default_factory=lambda: np.array(
-            [28.0, 28.0, 22.0, 22.0, 10.0, 10.0, 8.0, 4.0, 4.0] * 2,
-            dtype=np.float64,
-        ) * 2.0
-    )
 
     return_zero_command_on_nonfinite: bool = True
     min_module_speed_m_s: float = 1e-4
