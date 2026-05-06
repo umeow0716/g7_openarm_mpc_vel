@@ -42,7 +42,7 @@ class MITCommand:
     tau_ff: FloatArray
 
 @dataclass(slots=True)
-class TSIDLowLevelControllerConfig:
+class LowLevelControllerConfig:
     dt: float = 0.01
     base_velocity_frame: VelocityFrame = "world"
 
@@ -215,10 +215,10 @@ class LowLevelController:
 
     def __init__(
         self,
-        config: TSIDLowLevelControllerConfig | None = None,
+        config: LowLevelControllerConfig | None = None,
         lib_path: str = "include/libg7_openarm_quat.so",
     ) -> None:
-        self.config = config if config is not None else TSIDLowLevelControllerConfig()
+        self.config = config if config is not None else LowLevelControllerConfig()
         self.lib_path = lib_path
         self.model = PinnZooModel(lib_path)
 
