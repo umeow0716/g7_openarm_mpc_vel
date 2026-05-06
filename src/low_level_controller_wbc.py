@@ -1,28 +1,3 @@
-"""TSID-lite low-level controller with base MIT feedback for G7 OpenArm.
-
-Drop-in API:
-
-    command = LowLevelController.update(qpos, qvel, u_des)
-
-where ``u_des`` is the existing 21-D velocity-planner output:
-
-    [base_vx, base_vy, base_wz, left_arm_vel(9), right_arm_vel(9)]
-
-Runtime architecture
---------------------
-Base:
-    base_vx/vy/wz -> swerve steering angle + wheel velocity targets
-                  -> MITCommand kp/kd feedback in sim_viewer.py
-
-Arm:
-    TSID-lite inverse-dynamics QP -> tau_ff
-    optional MIT velocity feedback through kd
-
-The base no longer computes an internal PID torque into tau_ff.  Its PID/PD
-feedback is exposed through the MITCommand fields, so the simulator applies it
-against the current qpos/qvel state.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -64,38 +39,6 @@ class MITCommand:
     kd: FloatArray
     tau_ff: FloatArray
 
-
-@dataclass(slots=True)
-class TSIDTaskData:
-    """Acceleration-level task written as ``A @ vdot ~= rhs``."""
-
-    jacobian: FloatArray
-    rhs: FloatArray
-    weight_diag: FloatArray
-
-
-@dataclass(slots=True)
-class TSIDQPWeights:
-    """Diagonal TSID QP weights.
-
-    ``ee_pos_acc`` weights the true task-space acceleration objective.
-    ``arm_acc`` is a joint-space posture / velocity-tracking secondary task.
-    Larger torque weights make the torque smaller and less aggressive.
-    """
-
-    ee_pos_acc: float = 120.0
-    arm_acc: FloatArray | float = field(
-        default_factory=lambda: np.array(
-            [25.0, 25.0, 20.0, 20.0, 10.0, 10.0, 8.0, 5.0, 5.0] * 2,
-            dtype=np.float64,
-        )
-    )
-    torque: float = 1e-4
-    torque_rate: float = 1e-5
-    vdot_regularization: float = 1e-6
-
-
-
 @dataclass(slots=True)
 class TSIDLowLevelControllerConfig:
     dt: float = 0.01
@@ -116,32 +59,13 @@ class TSIDLowLevelControllerConfig:
         ) * 2.0
     )
 
-    # TSID end-effector task.  Without an explicit EE position target, this
-    # behaves as an EE velocity-tracking task generated from the planner's
-    # desired arm joint velocity.  If set_ee_position_target() is called, the
-    # same task also adds position feedback.
-    enable_ee_position_task: bool = True
-    ee_position_kp: float = 80.0
-    ee_velocity_kd: float = 24.0
-    ee_acc_limit_m_s2: float = 25.0
-    use_base_velocity_in_ee_reference: bool = False
-
-    enable_arm_joint_task: bool = True
-
-    command_smoothing_alpha: float = 0.10
     return_zero_command_on_nonfinite: bool = True
     min_module_speed_m_s: float = 1e-4
 
     steering_vel_limit_rad_s: float = 6.0
     wheel_vel_limit_rad_s: float = 30.0
-    arm_vel_limit_rad_s: float = 2.0
 
     arm_acc_limit_rad_s2: float = 80.0
-
-    # The mid-level MPC command is already a velocity command. Differentiating
-    # it with (v_des[k] - v_des[k-1]) / dt creates large acceleration spikes
-    # whenever the MPC solution changes. Keep this off by default.
-    arm_velocity_feedforward_gain: float = 0.0
 
     # Match the direct qvel demo path in sim_viewer.py: the two gripper joints
     # per arm are not part of the end-effector task, so do not let numerical MPC
@@ -157,8 +81,8 @@ class TSIDLowLevelControllerConfig:
 
     # If the chassis command is essentially zero, disable base MIT feedback so
     # steering and wheel motors do not keep hunting around numerical noise.
-    base_idle_linear_threshold_m_s: float = 1e-2
-    base_idle_angular_threshold_rad_s: float = 1e-2
+    base_idle_linear_threshold_m_s: float = 1e-3
+    base_idle_angular_threshold_rad_s: float = 1e-3
 
     # Use the existing MITCommand path as the fast velocity feedback loop:
     #
@@ -174,20 +98,12 @@ class TSIDLowLevelControllerConfig:
             dtype=np.float64,
         )
     )
-
-    # Evaluate C(q, v) near the velocity command instead of at stale measured
-    # qvel.  This follows the original PID implementation's gravity/bias
-    # compensation behavior more closely.
-    bias_use_desired_velocity: bool = True
-    bias_position_preview_s: float = 0.05
-
-    arm_tau_limit_scale: float = 1.0
-
-    max_active_set_iter: int = 8
-    qp_condition_regularization: float = 1e-9
-
-
-    weights: TSIDQPWeights = field(default_factory=TSIDQPWeights)
+    arm_motor_kp: FloatArray | float = field(
+        default_factory=lambda: np.array(
+            [3.0, 3.0, 2.5, 2.5, 1.0, 1.0, 0.8, 0.0, 0.0] * 2,
+            dtype=np.float64,
+        )
+    )
 
 
 class WholeBodyDynamicsLibrary:
@@ -389,8 +305,8 @@ class LowLevelController:
             7.0,
             7.0,
             7.0,
-            15.0,
-            15.0,
+            7.0,
+            7.0,
             40.0,
             40.0,
             27.0,
@@ -398,8 +314,8 @@ class LowLevelController:
             7.0,
             7.0,
             7.0,
-            15.0,
-            15.0,
+            7.0,
+            7.0,
         ],
         dtype=np.float64,
     )
@@ -416,6 +332,8 @@ class LowLevelController:
         self.num_motors = len(self.motor_names)
         self._prev_u_des = np.zeros(OPENARM_NU, dtype=np.float64)
         self._prev_arm_vel_des = np.zeros(18, dtype=np.float64)
+        self._arm_pos_des = np.zeros(18, dtype=np.float64)
+        self._arm_pos_des_initialized = False
         self._prev_tau = np.zeros(self.num_motors, dtype=np.float64)
         self._initialized = False
         self._ee_pos_target: FloatArray | None = None
@@ -435,12 +353,49 @@ class LowLevelController:
         # clamped to zero here.
         self._tau_min = np.zeros(self.num_motors, dtype=np.float64)
         self._tau_max = np.zeros(self.num_motors, dtype=np.float64)
-        arm_limit = self.config.arm_tau_limit_scale * self._arm_xml_tau_limit
-        self._tau_min[self._arm_act_idx] = -arm_limit
-        self._tau_max[self._arm_act_idx] = arm_limit
+        self._tau_min[self._arm_act_idx] = -self._arm_xml_tau_limit
+        self._tau_max[self._arm_act_idx] = self._arm_xml_tau_limit
 
         self._selection_act = np.zeros((self.num_motors, OPENARM_NV), dtype=np.float64)
         self._selection_act[np.arange(self.num_motors), self._actuated_v_idx] = 1.0
+    
+    def compute_kd_from_mass_matrix(
+        self,
+        x: FloatArray,
+        zeta=0.7,
+        omega_n=8.0,
+        per_joint_omega=None,
+    ):
+        """
+        根據 mass matrix 自動生成 Kd
+
+        Args:
+            model: PinnZooModel
+            q: 當前 state（或 zero_state）
+            zeta: 阻尼比（建議 0.7）
+            omega_n: 頻率（scalar 或 float）
+            per_joint_omega: (optional) 每個 joint 不同頻率 array
+
+        Returns:
+            Kd: np.ndarray (n_dof,)
+        """
+
+        # 取得 mass matrix
+        M = self.dyn.mass_matrix(x)
+
+        # 取 diagonal inertia
+        M_diag = np.diag(M)
+
+        # 決定 omega
+        if per_joint_omega is not None:
+            omega = np.asarray(per_joint_omega)
+        else:
+            omega = omega_n
+
+        # 計算 Kd
+        Kd = 2.0 * zeta * omega * np.sqrt(M_diag)
+
+        return Kd
 
     def set_ee_position_target(
         self,
@@ -470,6 +425,8 @@ class LowLevelController:
     def reset(self) -> None:
         self._prev_u_des[:] = 0.0
         self._prev_arm_vel_des[:] = 0.0
+        self._arm_pos_des[:] = 0.0
+        self._arm_pos_des_initialized = False
         self._prev_tau[:] = 0.0
         self._initialized = False
 
@@ -501,12 +458,10 @@ class LowLevelController:
                 return self._zero_command()
             raise ValueError("qpos, qvel, and u_des must be finite")
 
-        u_cmd = self._smooth_command(u_des)
-
-        base_command_is_idle = self._is_base_command_idle(u_cmd)
+        base_command_is_idle = self._is_base_command_idle(u_des)
         steer_pos_des, steer_vel_des, wheel_vel_des = self._base_velocity_to_swerve_targets(
             qpos=qpos,
-            u_cmd=u_cmd,
+            u_cmd=u_des,
         )
         if base_command_is_idle:
             # Stop commanding the base when the requested chassis velocity is
@@ -517,7 +472,7 @@ class LowLevelController:
             steer_vel_des = np.zeros_like(steer_vel_des)
             wheel_vel_des = np.zeros_like(wheel_vel_des)
 
-        arm_vel_des = self._arm_velocity_command(u_cmd)
+        arm_vel_des = self._arm_velocity_command(u_des)
 
         if (
             not np.all(np.isfinite(steer_pos_des))
@@ -530,39 +485,41 @@ class LowLevelController:
                 return self._zero_command()
             raise FloatingPointError("desired velocity targets contain non-finite values")
 
+        if not self._arm_pos_des_initialized:
+            self._arm_pos_des[:] = qpos[self._arm_qpos_idx]
+            self._arm_pos_des_initialized = True
+        self._arm_pos_des += self.config.dt * arm_vel_des
+
         desired_act_acc = self._build_desired_actuator_acceleration(
-            qvel=qvel,
-            arm_vel_des=arm_vel_des,
-        )
-
-        x_ff = self._make_feedforward_state(
             qpos=qpos,
             qvel=qvel,
-            steer_vel_des=steer_vel_des,
-            wheel_vel_des=wheel_vel_des,
-            arm_vel_des=arm_vel_des,
+            arm_vel_des=u_des[3:],
         )
-        mass_matrix = self.dyn.mass_matrix(x_ff)
-        bias_force = self.dyn.bias_force(x_ff)
-        if not np.all(np.isfinite(mass_matrix)) or not np.all(np.isfinite(bias_force)):
-            if self.config.return_zero_command_on_nonfinite:
-                self.reset()
-                return self._zero_command()
-            raise FloatingPointError("mass matrix or bias force contains non-finite values")
-
-        tsid_task = self._build_tsid_task(
-            qpos=qpos,
-            qvel=qvel,
-            u_cmd=u_cmd,
-            arm_vel_des=arm_vel_des,
-        )
-
-        _, tau_act = self._solve_tsid_qp(
-            mass_matrix=mass_matrix,
-            bias_force=bias_force,
-            desired_act_acc=desired_act_acc,
-            tsid_task=tsid_task,
-        )
+        
+        desired_u = np.concatenate([np.zeros(6, dtype=np.float64), desired_act_acc])
+        tau_act = self.dyn.inverse_dynamics_generalized(
+            x=self.dyn.make_state(qpos, qvel),
+            vdot=desired_u,
+        )[6:]
+        
+        tau0 = np.array([
+            0.15,   # joint 1
+            0.15,   # joint 2
+            0.15,   # joint 3
+            0.15,   # joint 4
+            0.15,   # joint 5
+            0.15,   # joint 6
+            0.30,  # joint 7
+            0.15,    # joint 8
+            0.15,    # joint 9
+        ] * 2)
+        
+        is_stuck = np.abs(u_des[3:]) > 3e-2
+        print(is_stuck)
+        
+        tau_bias = tau0 * is_stuck * np.sign(u_des[3:])
+        tau_act[8:] += tau_bias
+        
         if not np.all(np.isfinite(tau_act)):
             if self.config.return_zero_command_on_nonfinite:
                 self.reset()
@@ -588,7 +545,7 @@ class LowLevelController:
         vel_des[self._steer_act_idx] = steer_vel_des
         pos_des[self._wheel_act_idx] = qpos[self._wheel_qpos_idx]
         vel_des[self._wheel_act_idx] = wheel_vel_des
-        pos_des[self._arm_act_idx] = qpos[self._arm_qpos_idx]
+        pos_des[self._arm_act_idx] = self._arm_pos_des
         vel_des[self._arm_act_idx] = arm_vel_des
 
         # Base MIT feedback is active only when the chassis command is not
@@ -600,6 +557,7 @@ class LowLevelController:
             kd[self._wheel_act_idx] = self.config.base_wheel_kd
 
         if self.config.use_motor_velocity_feedback:
+            kp[self._arm_act_idx] = self.config.arm_motor_kp
             kd[self._arm_act_idx] = self.config.arm_motor_kd
 
         return MITCommand(
@@ -610,41 +568,6 @@ class LowLevelController:
             kd=kd,
             tau_ff=tau_act,
         )
-
-    def _make_feedforward_state(
-        self,
-        qpos: FloatArray,
-        qvel: FloatArray,
-        steer_vel_des: FloatArray,
-        wheel_vel_des: FloatArray,
-        arm_vel_des: FloatArray,
-    ) -> FloatArray:
-        qpos_ff = qpos.copy()
-        qvel_ff = qvel.copy()
-
-        if self.config.bias_position_preview_s > 0.0:
-            preview_s = float(self.config.bias_position_preview_s)
-            qpos_ff[self._arm_qpos_idx] = (
-                qpos_ff[self._arm_qpos_idx] + preview_s * arm_vel_des
-            )
-
-        if self.config.bias_use_desired_velocity:
-            # Only preview arm velocity for the arm/WBC feed-forward term.
-            # Base steering and wheel tracking are handled by MIT kp/kd.
-            qvel_ff[self._arm_qvel_idx] = arm_vel_des
-
-        return self.dyn.make_state(qpos_ff, qvel_ff)
-
-    def _smooth_command(self, u_des: FloatArray) -> FloatArray:
-        alpha = float(np.clip(self.config.command_smoothing_alpha, 0.0, 0.999))
-        if not self._initialized:
-            self._prev_u_des[:] = u_des
-            self._initialized = True
-            return u_des.copy()
-
-        u_cmd = alpha * self._prev_u_des + (1.0 - alpha) * u_des
-        self._prev_u_des[:] = u_cmd
-        return u_cmd
 
     def _is_base_command_idle(self, u_cmd: FloatArray) -> bool:
         linear_speed = float(np.hypot(
@@ -725,14 +648,11 @@ class LowLevelController:
             # left gripper_LL/LR and right gripper_RL/RR inside the 18-D arm vector
             arm_vel_des[[7, 8, 16, 17]] = 0.0
 
-        return np.clip(
-            arm_vel_des,
-            -self.config.arm_vel_limit_rad_s,
-            self.config.arm_vel_limit_rad_s,
-        )
+        return arm_vel_des
 
     def _build_desired_actuator_acceleration(
         self,
+        qpos: FloatArray,
         qvel: FloatArray,
         arm_vel_des: FloatArray,
     ) -> FloatArray:
@@ -740,9 +660,22 @@ class LowLevelController:
 
         arm_acc_ff = (arm_vel_des - self._prev_arm_vel_des) / max(self.config.dt, 1e-9)
         arm_vel_err = arm_vel_des - qvel[self._arm_qvel_idx]
+        
+        x = self.dyn.make_state(
+                qpos=qpos,
+                qvel=qvel,
+        )
+        
+        KDs = self.compute_kd_from_mass_matrix(
+            x,
+            zeta=0.7,
+            omega_n=8.0,
+        )
+        
+        arm_kd = KDs[6+8:6+8+18]
+        
         acc[self._arm_act_idx] = (
-            self.config.arm_velocity_feedforward_gain * arm_acc_ff
-            + self.config.arm_kd * arm_vel_err
+            arm_acc_ff + arm_kd * arm_vel_err
         )
         acc[self._arm_act_idx] = np.clip(
             acc[self._arm_act_idx],
@@ -755,227 +688,6 @@ class LowLevelController:
                 return np.zeros(self.num_motors, dtype=np.float64)
             raise FloatingPointError("desired actuator acceleration contains non-finite values")
         return acc
-
-    def _build_tsid_task(
-        self,
-        qpos: FloatArray,
-        qvel: FloatArray,
-        u_cmd: FloatArray,
-        arm_vel_des: FloatArray,
-    ) -> TSIDTaskData:
-        """Build the Cartesian TSID task ``A @ vdot ~= rhs``.
-
-        The generated ``kinematics_velocity_jacobian`` returns
-        ``d(kinematics_velocity) / d[q, v]``.  Since
-        ``kinematics_velocity = J(q) v``, we recover:
-
-            J       = d(kinematics_velocity) / dv
-            Jdot v  = d(kinematics_velocity) / dq * qdot
-
-        Therefore task acceleration is:
-
-            xddot = J vdot + Jdot v
-        """
-        if not self.config.enable_ee_position_task:
-            return TSIDTaskData(
-                jacobian=np.zeros((0, OPENARM_NV), dtype=np.float64),
-                rhs=np.zeros(0, dtype=np.float64),
-                weight_diag=np.zeros(0, dtype=np.float64),
-            )
-
-        x_now = self.dyn.make_state(qpos, qvel)
-        task_vel_now_all = self.dyn.kinematics_velocity(x_now)
-        task_vel_jac_all = self.dyn.kinematics_velocity_jacobian(x_now)
-        velocity_kinematics = self.dyn.velocity_kinematics_matrix(x_now)
-        qdot = velocity_kinematics @ qvel
-
-        rows = self._ee_pos_rows
-        task_jacobian = task_vel_jac_all[rows, OPENARM_NQ:]
-        jdot_v = task_vel_jac_all[rows, :OPENARM_NQ] @ qdot
-        task_vel_now = task_vel_now_all[rows]
-
-        qvel_ref = qvel.copy()
-        qvel_ref[self._arm_qvel_idx] = arm_vel_des
-
-        if self.config.use_base_velocity_in_ee_reference:
-            vx = float(u_cmd[OPENARM_U_BASE_VX])
-            vy = float(u_cmd[OPENARM_U_BASE_VY])
-            wz = float(u_cmd[OPENARM_U_BASE_WZ])
-            if self.config.base_velocity_frame == "body":
-                rot_world_from_body = quat_to_rotmat(qpos[OPENARM_WORLD_QUAT])
-                v_world = rot_world_from_body @ np.array([vx, vy, 0.0], dtype=np.float64)
-                qvel_ref[0] = float(v_world[0])
-                qvel_ref[1] = float(v_world[1])
-            else:
-                qvel_ref[0] = vx
-                qvel_ref[1] = vy
-            qvel_ref[5] = wz
-
-        x_ref = self.dyn.make_state(qpos, qvel_ref)
-        task_vel_ref = self.dyn.kinematics_velocity(x_ref)[rows]
-
-        task_acc_des = self.config.ee_velocity_kd * (task_vel_ref - task_vel_now)
-
-        if self._ee_pos_target is not None:
-            task_pos_now = self.dyn.kinematics(x_now)[rows]
-            task_acc_des += self.config.ee_position_kp * (self._ee_pos_target - task_pos_now)
-
-        task_acc_des = np.clip(
-            task_acc_des,
-            -self.config.ee_acc_limit_m_s2,
-            self.config.ee_acc_limit_m_s2,
-        )
-
-        rhs = task_acc_des - jdot_v
-        weight_diag = np.full(
-            len(rows),
-            self.config.weights.ee_pos_acc,
-            dtype=np.float64,
-        )
-
-        if not (
-            np.all(np.isfinite(task_jacobian))
-            and np.all(np.isfinite(rhs))
-            and np.all(np.isfinite(weight_diag))
-        ):
-            if self.config.return_zero_command_on_nonfinite:
-                return TSIDTaskData(
-                    jacobian=np.zeros((0, OPENARM_NV), dtype=np.float64),
-                    rhs=np.zeros(0, dtype=np.float64),
-                    weight_diag=np.zeros(0, dtype=np.float64),
-                )
-            raise FloatingPointError("TSID task contains non-finite values")
-
-        return TSIDTaskData(
-            jacobian=task_jacobian,
-            rhs=rhs,
-            weight_diag=weight_diag,
-        )
-
-    def _solve_tsid_qp(
-        self,
-        mass_matrix: FloatArray,
-        bias_force: FloatArray,
-        desired_act_acc: FloatArray,
-        tsid_task: TSIDTaskData,
-    ) -> tuple[FloatArray, FloatArray]:
-        nv = OPENARM_NV
-        na = self.num_motors
-        nvar = nv + na
-
-        selection = self._selection_act
-        mass_act = mass_matrix[self._actuated_v_idx, :]
-        bias_act = bias_force[self._actuated_v_idx]
-
-        hessian = np.zeros((nvar, nvar), dtype=np.float64)
-        gradient = np.zeros(nvar, dtype=np.float64)
-
-        # Primary TSID Cartesian task: J_ee vdot ~= xddot_des - Jdot v.
-        if tsid_task.jacobian.shape[0] > 0:
-            task_a = tsid_task.jacobian
-            task_b = tsid_task.rhs
-            task_w = tsid_task.weight_diag
-            hessian[:nv, :nv] += task_a.T @ (task_w[:, None] * task_a)
-            gradient[:nv] += -(task_a.T @ (task_w * task_b))
-
-        # Secondary joint-space task. This keeps the solution close to the
-        # velocity planner's arm command even when the Cartesian task is
-        # underdetermined or locally singular.
-        if self.config.enable_arm_joint_task:
-            acc_weight_diag = self._acceleration_weight_diag()
-            hessian[:nv, :nv] += selection.T @ (acc_weight_diag[:, None] * selection)
-            gradient[:nv] += -(selection.T @ (acc_weight_diag * desired_act_acc))
-
-        torque_weight_diag = np.full(na, self.config.weights.torque, dtype=np.float64)
-        torque_rate_weight_diag = np.full(na, self.config.weights.torque_rate, dtype=np.float64)
-        hessian[nv:, nv:] += np.diag(torque_weight_diag + torque_rate_weight_diag)
-        gradient[nv:] += -(torque_rate_weight_diag * self._prev_tau)
-
-        hessian[:nv, :nv] += self.config.weights.vdot_regularization * np.eye(nv, dtype=np.float64)
-
-
-        hessian += self.config.qp_condition_regularization * np.eye(nvar, dtype=np.float64)
-        hessian = 0.5 * (hessian + hessian.T)
-
-        # S_act (M vdot + C) - tau = 0 -> S_act M vdot - tau = -S_act C
-        equality = np.zeros((na, nvar), dtype=np.float64)
-        equality[:, :nv] = mass_act
-        equality[:, nv:] = -np.eye(na, dtype=np.float64)
-        equality_rhs = -bias_act
-
-
-        active_tau_idx: list[int] = []
-        active_tau_value: list[float] = []
-
-        solution = self._solve_equality_qp(hessian, gradient, equality, equality_rhs)
-        tau = solution[nv:].copy()
-
-        for _ in range(self.config.max_active_set_iter):
-            lower_violation = tau < self._tau_min
-            upper_violation = tau > self._tau_max
-            violated = np.where(lower_violation | upper_violation)[0]
-            new_active = False
-
-            for idx in violated:
-                idx_int = int(idx)
-                if idx_int in active_tau_idx:
-                    continue
-                active_tau_idx.append(idx_int)
-                if lower_violation[idx_int]:
-                    active_tau_value.append(float(self._tau_min[idx_int]))
-                else:
-                    active_tau_value.append(float(self._tau_max[idx_int]))
-                new_active = True
-
-            if not new_active:
-                break
-
-            bound_equality = np.zeros((len(active_tau_idx), nvar), dtype=np.float64)
-            for row, idx_int in enumerate(active_tau_idx):
-                bound_equality[row, nv + idx_int] = 1.0
-            augmented_equality = np.vstack([equality, bound_equality])
-            augmented_rhs = np.concatenate([equality_rhs, np.array(active_tau_value, dtype=np.float64)])
-
-            solution = self._solve_equality_qp(
-                hessian,
-                gradient,
-                augmented_equality,
-                augmented_rhs,
-            )
-            tau = solution[nv:].copy()
-
-        tau = np.clip(tau, self._tau_min, self._tau_max)
-        vdot = solution[:nv].copy()
-        return vdot, tau
-
-    def _solve_equality_qp(
-        self,
-        hessian: FloatArray,
-        gradient: FloatArray,
-        equality: FloatArray,
-        equality_rhs: FloatArray,
-    ) -> FloatArray:
-        nvar = hessian.shape[0]
-        neq = equality.shape[0]
-        kkt = np.block(
-            [
-                [hessian, equality.T],
-                [equality, np.zeros((neq, neq), dtype=np.float64)],
-            ]
-        )
-        rhs = np.concatenate([-gradient, equality_rhs])
-
-        try:
-            sol = np.linalg.solve(kkt, rhs)
-        except np.linalg.LinAlgError:
-            sol = np.linalg.lstsq(kkt, rhs, rcond=1e-10)[0]
-
-        return sol[:nvar]
-
-    def _acceleration_weight_diag(self) -> FloatArray:
-        weights = np.zeros(self.num_motors, dtype=np.float64)
-        weights[self._arm_act_idx] = self.config.weights.arm_acc
-        return weights
 
     @staticmethod
     def _wrap_to_pi(angle: FloatArray | float) -> FloatArray | float:
