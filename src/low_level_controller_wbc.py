@@ -23,6 +23,7 @@ from .utils import quat_to_rotmat
 
 FloatArray = npt.NDArray[np.float64]
 VelocityFrame = Literal["body", "world"]
+EnvType = Literal["sim", "real"]
 
 
 @dataclass(slots=True)
@@ -40,7 +41,8 @@ class MITCommand:
 class LowLevelControllerConfig:
     dt: float = 0.01
     base_velocity_frame: VelocityFrame = "world"
-
+    env_type: EnvType = "sim"
+    
     wheel_radius_m: float = 0.052
     fl_pos_xy_m: tuple[float, float] = (0.198, 0.13)
     fr_pos_xy_m: tuple[float, float] = (0.198, -0.13)
@@ -159,13 +161,8 @@ class LowLevelController:
         self.model = PinnZooModel(lib_path)
 
         self.num_motors = len(self.motor_names)
-        self._prev_u_des = np.zeros(OPENARM_NU, dtype=np.float64)
         self._prev_arm_vel_des = np.zeros(18, dtype=np.float64)
-        self._arm_pos_des = np.zeros(18, dtype=np.float64)
-        self._arm_pos_des_initialized = False
-        self._prev_tau = np.zeros(self.num_motors, dtype=np.float64)
         self._initialized = False
-        self._ee_pos_target: FloatArray | None = None
 
         self._module_xy = np.array(
             [
@@ -176,10 +173,7 @@ class LowLevelController:
             ],
             dtype=np.float64,
         )
-
-        # Only arm tau_ff is produced by this controller.  Base torque is
-        # generated later by sim_viewer.py from MIT kp/kd, so base tau_ff is
-        # clamped to zero here.
+        
         self._tau_min = np.zeros(self.num_motors, dtype=np.float64)
         self._tau_max = np.zeros(self.num_motors, dtype=np.float64)
         self._tau_min[self._arm_act_idx] = -self._arm_xml_tau_limit
@@ -208,11 +202,7 @@ class LowLevelController:
         return Kd
 
     def reset(self) -> None:
-        self._prev_u_des[:] = 0.0
         self._prev_arm_vel_des[:] = 0.0
-        self._arm_pos_des[:] = 0.0
-        self._arm_pos_des_initialized = False
-        self._prev_tau[:] = 0.0
         self._initialized = False
 
     def _zero_command(self) -> MITCommand:
@@ -263,11 +253,6 @@ class LowLevelController:
             self.reset()
             return self._zero_command()
 
-        if not self._arm_pos_des_initialized:
-            self._arm_pos_des[:] = qpos[self._arm_qpos_idx]
-            self._arm_pos_des_initialized = True
-        self._arm_pos_des += self.config.dt * arm_vel_des
-
         desired_act_acc = self._build_desired_actuator_acceleration(
             qpos=qpos,
             qvel=qvel,
@@ -312,7 +297,6 @@ class LowLevelController:
         tau_act = np.clip(tau_act, self._tau_min, self._tau_max)
 
         self._prev_arm_vel_des[:] = arm_vel_des
-        self._prev_tau[:] = tau_act
 
         pos_des = np.zeros(self.num_motors, dtype=np.float64)
         vel_des = np.zeros(self.num_motors, dtype=np.float64)
@@ -323,7 +307,6 @@ class LowLevelController:
         vel_des[self._steer_act_idx] = steer_vel_des
         pos_des[self._wheel_act_idx] = qpos[self._wheel_qpos_idx]
         vel_des[self._wheel_act_idx] = wheel_vel_des
-        pos_des[self._arm_act_idx] = self._arm_pos_des
         vel_des[self._arm_act_idx] = arm_vel_des
 
         if not base_command_is_idle:
