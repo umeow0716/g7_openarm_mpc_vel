@@ -9,6 +9,7 @@ Task for dual arm end effector target tracking
 ## Project Structure
 
 - `src/` - core MPC and robot-related logic
+  - `low_level_controller_wbc.py` - low level controller
   - `mpc_solver.py` - main MPC solver
   - `mpc_types.py` - shared data types
   - `openarm_dynamic.py` - robot dynamics
@@ -34,4 +35,24 @@ python sim_viewer.py
 ```bash
 uv sync
 uv run sim_viewer.py
+```
+
+##### Error when `uv sync` or `pip install -r requirements.txt`:
+```bash
+Could not locate cyclonedds. Try to set CYCLONEDDS_HOME or CMAKE_PREFIX_PATH
+```
+This error mentions that the cyclonedds path could not be found. First compile and install cyclonedds:
+
+```bash
+cd ~
+git clone https://github.com/eclipse-cyclonedds/cyclonedds -b releases/0.10.x 
+cd cyclonedds && mkdir build install && cd build
+cmake .. -DCMAKE_INSTALL_PREFIX=../install
+cmake --build . --target install
+```
+Enter the project directory, set `CYCLONEDDS_HOME` to the path of the cyclonedds you just compiled, and then install requirements again.
+```bash
+CYCLONEDDS_HOME=~/cyclonedds/install uv sync
+# or
+CYCLONEDDS_HOME=~/cyclonedds/install pip install -r requirements.txt
 ```

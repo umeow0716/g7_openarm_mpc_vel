@@ -8,4 +8,8 @@ dependencies = [
     "cffi>=2.0.0",
     "matplotlib>=3.10.8",
     "mujoco>=3.7.0",
+    "unitree-sdk2py",
 ]
+
+[tool.uv.sources]
+unitree-sdk2py = { git = "https://github.com/unitreerobotics/unitree_sdk2_python" }
