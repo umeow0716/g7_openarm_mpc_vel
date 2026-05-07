@@ -25,7 +25,6 @@ FloatArray = npt.NDArray[np.float64]
 VelocityFrame = Literal["body", "world"]
 EnvType = Literal["sim", "real"]
 
-
 @dataclass(slots=True)
 class MITCommand:
     """MIT motor command arrays in actuator order."""
@@ -60,8 +59,8 @@ class LowLevelControllerConfig:
     base_steering_kd: float = 0.02
     base_wheel_kd: float = 5.0
 
-    base_idle_linear_threshold_m_s: float = 1e-3
-    base_idle_angular_threshold_rad_s: float = 1e-3
+    base_idle_linear_threshold_m_s: float = 1e-2
+    base_idle_angular_threshold_rad_s: float = 5e-2
     
     arm_motor_kd: FloatArray | float = field(
         default_factory=lambda: np.array(
@@ -106,6 +105,18 @@ class LowLevelController:
         "gripper_RL_motor",
         "gripper_RR_motor",
     ]
+    
+    tau_static = np.array([
+        0.15,
+        0.15,
+        0.15,
+        0.15,
+        0.15,
+        0.15,
+        0.30,
+        0.15,
+        0.15,
+    ] * 2)
 
     # qpos indices in configuration order.
     _steer_qpos_idx = np.array([7, 9, 11, 13], dtype=np.int32)
@@ -182,7 +193,7 @@ class LowLevelController:
         self._selection_act = np.zeros((self.num_motors, OPENARM_NV), dtype=np.float64)
         self._selection_act[np.arange(self.num_motors), self._actuated_v_idx] = 1.0
     
-    def compute_kd_from_mass_matrix(
+    def compute_arm_kd_from_mass_matrix(
         self,
         x: FloatArray,
         zeta=0.7,
@@ -198,8 +209,7 @@ class LowLevelController:
             omega = omega_n
             
         Kd = 2.0 * zeta * omega * np.sqrt(M_diag)
-        
-        return Kd
+        return Kd[self._arm_qvel_idx]
 
     def reset(self) -> None:
         self._prev_arm_vel_des[:] = 0.0
@@ -230,33 +240,23 @@ class LowLevelController:
         if not np.all(np.isfinite(qpos)) or not np.all(np.isfinite(qvel)) or not np.all(np.isfinite(u_des)):
             self.reset()
             return self._zero_command()
+        
+        arm_vel_des = u_des[3:]
 
         base_command_is_idle = self._is_base_command_idle(u_des)
-        steer_pos_des, steer_vel_des, wheel_vel_des = self._base_velocity_to_swerve_targets(
+        steer_pos_des, wheel_vel_des = self._base_velocity_to_swerve_targets(
             qpos=qpos,
             u_cmd=u_des,
         )
         
         if base_command_is_idle:
             steer_pos_des = qpos[self._steer_qpos_idx].copy()
-            steer_vel_des = np.zeros_like(steer_vel_des)
             wheel_vel_des = np.zeros_like(wheel_vel_des)
-
-        arm_vel_des = u_des[3:]
-
-        if (
-            not np.all(np.isfinite(steer_pos_des))
-            or not np.all(np.isfinite(steer_vel_des))
-            or not np.all(np.isfinite(wheel_vel_des))
-            or not np.all(np.isfinite(arm_vel_des))
-        ):
-            self.reset()
-            return self._zero_command()
 
         desired_act_acc = self._build_desired_actuator_acceleration(
             qpos=qpos,
             qvel=qvel,
-            arm_vel_des=u_des[3:],
+            arm_vel_des=arm_vel_des,
         )
         
         x = np.concatenate([qpos, qvel])
@@ -267,30 +267,15 @@ class LowLevelController:
             vdot=desired_vdot,
         )[6:]
         
-        tau0 = np.array([
-            0.15,   # joint 1
-            0.15,   # joint 2
-            0.15,   # joint 3
-            0.15,   # joint 4
-            0.15,   # joint 5
-            0.15,   # joint 6
-            0.30,  # joint 7
-            0.15,    # joint 8
-            0.15,    # joint 9
-        ] * 2)
-        
         want_move = np.abs(u_des[3:]) > 4e-2
 
-        tau_bias = tau0 * want_move * np.sign(u_des[3:])
+        tau_bias = self.tau_static * want_move * np.sign(u_des[3:])
         tau_act[8:] += tau_bias
         
         if not np.all(np.isfinite(tau_act)):
             self.reset()
             return self._zero_command()
 
-        # Base is controlled by MIT kp/kd feedback in the returned command.
-        # Do not precompute base PID torque into tau_ff; otherwise the gains are
-        # evaluated against stale state before sim_viewer.py applies the command.
         tau_act[self._steer_act_idx] = 0.0
         tau_act[self._wheel_act_idx] = 0.0
         tau_act = np.clip(tau_act, self._tau_min, self._tau_max)
@@ -303,8 +288,6 @@ class LowLevelController:
         kd = np.zeros(self.num_motors, dtype=np.float64)
 
         pos_des[self._steer_act_idx] = steer_pos_des
-        vel_des[self._steer_act_idx] = steer_vel_des
-        pos_des[self._wheel_act_idx] = qpos[self._wheel_qpos_idx]
         vel_des[self._wheel_act_idx] = wheel_vel_des
         vel_des[self._arm_act_idx] = arm_vel_des
 
@@ -331,6 +314,7 @@ class LowLevelController:
             u_cmd[OPENARM_U_BASE_VY],
         ))
         angular_speed = abs(float(u_cmd[OPENARM_U_BASE_WZ]))
+        
         return (
             linear_speed < self.config.base_idle_linear_threshold_m_s
             and angular_speed < self.config.base_idle_angular_threshold_rad_s
@@ -340,7 +324,7 @@ class LowLevelController:
         self,
         qpos: FloatArray,
         u_cmd: FloatArray,
-    ) -> tuple[FloatArray, FloatArray, FloatArray]:
+    ) -> tuple[FloatArray, FloatArray]:
         vx = float(u_cmd[OPENARM_U_BASE_VX])
         vy = float(u_cmd[OPENARM_U_BASE_VY])
         wz = float(u_cmd[OPENARM_U_BASE_WZ])
@@ -386,14 +370,7 @@ class LowLevelController:
             self.config.wheel_vel_limit_rad_s,
         )
 
-        steering_error = self._wrap_to_pi(steer_pos_des - current_steer)
-        steer_vel_des = np.clip(
-            steering_error / max(self.config.dt, 1e-9),
-            -self.config.steering_vel_limit_rad_s,
-            self.config.steering_vel_limit_rad_s,
-        )
-
-        return steer_pos_des, steer_vel_des, wheel_vel_des
+        return steer_pos_des, wheel_vel_des
 
     def _build_desired_actuator_acceleration(
         self,
@@ -408,16 +385,14 @@ class LowLevelController:
         
         x = np.concatenate([qpos, qvel])
         
-        KDs = self.compute_kd_from_mass_matrix(
+        KDs = self.compute_arm_kd_from_mass_matrix(
             x,
             zeta=0.7,
             omega_n=8.0,
         )
         
-        arm_kd = KDs[6+8:6+8+18]
-        
         acc[self._arm_act_idx] = (
-            arm_acc_ff + arm_kd * arm_vel_err
+            arm_acc_ff + KDs * arm_vel_err
         )
         acc[self._arm_act_idx] = np.clip(
             acc[self._arm_act_idx],
