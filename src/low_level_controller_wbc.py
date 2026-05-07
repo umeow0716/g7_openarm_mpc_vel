@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
+import time
 import numpy as np
 import numpy.typing as npt
 
@@ -38,7 +39,6 @@ class MITCommand:
 
 @dataclass(slots=True)
 class LowLevelControllerConfig:
-    dt: float = 0.01
     base_velocity_frame: VelocityFrame = "body"
     env_type: EnvType = "sim"
     
@@ -63,13 +63,13 @@ class LowLevelControllerConfig:
     
     arm_motor_kd: FloatArray | float = field(
         default_factory=lambda: np.array(
-            [8.0, 8.0, 6.0, 6.0, 2.0, 3.0, 1.5, 0.0, 0.0] * 2,
+            [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0] * 2,
             dtype=np.float64,
         )
     )
     arm_motor_kp: FloatArray | float = field(
         default_factory=lambda: np.array(
-            [3.0, 3.0, 2.5, 2.5, 1.0, 1.0, 0.8, 0.0, 0.0] * 2,
+            [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] * 2,
             dtype=np.float64,
         )
     )
@@ -182,6 +182,7 @@ class LowLevelController:
         self._tau_max = np.zeros(self.num_motors, dtype=np.float64)
         self._tau_min[self._arm_act_idx] = -self._arm_xml_tau_limit
         self._tau_max[self._arm_act_idx] = self._arm_xml_tau_limit
+        self.prev_time = time.perf_counter()
     
     def compute_arm_kd_from_mass_matrix(
         self,
@@ -370,7 +371,10 @@ class LowLevelController:
     ) -> FloatArray:
         acc = np.zeros(self.num_motors, dtype=np.float64)
 
-        arm_acc_ff = (arm_vel_des - self._prev_arm_vel_des) / max(self.config.dt, 1e-9)
+        dt = time.perf_counter() - self.prev_time
+        arm_acc_ff = (arm_vel_des - self._prev_arm_vel_des) / dt
+        self.prev_time = time.perf_counter()
+        
         arm_vel_err = arm_vel_des - qvel[self._arm_qvel_idx]
         
         x = np.concatenate([qpos, qvel])
