@@ -39,18 +39,17 @@ class MITCommand:
 @dataclass(slots=True)
 class LowLevelControllerConfig:
     dt: float = 0.01
-    base_velocity_frame: VelocityFrame = "world"
+    base_velocity_frame: VelocityFrame = "body"
     env_type: EnvType = "sim"
     
     wheel_radius_m: float = 0.052
-    fl_pos_xy_m: tuple[float, float] = (0.198, 0.13)
-    fr_pos_xy_m: tuple[float, float] = (0.198, -0.13)
-    rl_pos_xy_m: tuple[float, float] = (-0.198, 0.13)
+    fl_pos_xy_m: tuple[float, float] = ( 0.198,  0.13)
+    fr_pos_xy_m: tuple[float, float] = ( 0.198, -0.13)
+    rl_pos_xy_m: tuple[float, float] = (-0.198,  0.13)
     rr_pos_xy_m: tuple[float, float] = (-0.198, -0.13)
 
     min_module_speed_m_s: float = 1e-4
 
-    steering_vel_limit_rad_s: float = 6.0
     wheel_vel_limit_rad_s: float = 30.0
 
     arm_acc_limit_rad_s2: float = 80.0
@@ -128,12 +127,6 @@ class LowLevelController:
     _wheel_qvel_idx = np.array([7, 9, 11, 13], dtype=np.int32)
     _arm_qvel_idx = np.arange(14, 32, dtype=np.int32)
 
-    # Actuator order -> generalized velocity row index.
-    _actuated_v_idx = np.array(
-        [6, 8, 10, 12, 7, 9, 11, 13, *range(14, 32)],
-        dtype=np.int32,
-    )
-
     _steer_act_idx = np.array([0, 1, 2, 3], dtype=np.int32)
     _wheel_act_idx = np.array([4, 5, 6, 7], dtype=np.int32)
     _arm_act_idx = np.arange(8, 26, dtype=np.int32)
@@ -189,9 +182,6 @@ class LowLevelController:
         self._tau_max = np.zeros(self.num_motors, dtype=np.float64)
         self._tau_min[self._arm_act_idx] = -self._arm_xml_tau_limit
         self._tau_max[self._arm_act_idx] = self._arm_xml_tau_limit
-
-        self._selection_act = np.zeros((self.num_motors, OPENARM_NV), dtype=np.float64)
-        self._selection_act[np.arange(self.num_motors), self._actuated_v_idx] = 1.0
     
     def compute_arm_kd_from_mass_matrix(
         self,
