@@ -279,9 +279,9 @@ class LowLevelController:
             0.15,    # joint 9
         ] * 2)
         
-        is_stuck = np.abs(u_des[3:]) > 3e-2
+        want_move = np.abs(u_des[3:]) > 4e-2
 
-        tau_bias = tau0 * is_stuck * np.sign(u_des[3:])
+        tau_bias = tau0 * want_move * np.sign(u_des[3:])
         tau_act[8:] += tau_bias
         
         if not np.all(np.isfinite(tau_act)):
