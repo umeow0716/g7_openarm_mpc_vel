@@ -22,6 +22,11 @@ Task for dual arm end effector target tracking
 
 ## Installation
 
+```bash
+git clone --recurse-submodules https://github.com/umeow0716/g7_openarm_mpc_vel
+cd g7_openarm_mpc_vel
+```
+
 ### conda or venv
 
 ```bash
@@ -37,10 +42,12 @@ uv sync
 uv run sim_viewer.py
 ```
 
-##### Error when `uv sync` or `pip install -r requirements.txt`:
+#### Error when `uv sync` or `pip install -r requirements.txt`:
+
 ```bash
 Could not locate cyclonedds. Try to set CYCLONEDDS_HOME or CMAKE_PREFIX_PATH
 ```
+
 This error mentions that the cyclonedds path could not be found. First compile and install cyclonedds:
 
 ```bash
