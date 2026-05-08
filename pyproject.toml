@@ -8,4 +8,9 @@ dependencies = [
     "cffi>=2.0.0",
     "matplotlib>=3.10.8",
     "mujoco>=3.7.0",
+    "pip>=26.1.1",
+    "unitree-sdk2py",
 ]
+
+[tool.uv.sources]
+unitree-sdk2py = { path = "third_party/unitree_sdk2_python", editable = true }
