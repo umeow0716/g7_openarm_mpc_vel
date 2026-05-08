@@ -7,8 +7,6 @@ import time
 import numpy as np
 import numpy.typing as npt
 
-from .utils import quat_to_rotmat
-
 from .pinnzoo_binding import PinnZooModel
 from .pinnzoo import M_func, inverse_dynamics
 
@@ -19,7 +17,6 @@ from .openarm_idx import (
     OPENARM_U_BASE_VX,
     OPENARM_U_BASE_VY,
     OPENARM_U_BASE_WZ,
-    OPENARM_WORLD_QUAT,
 )
 
 EnvType = Literal["sim", "real"]
