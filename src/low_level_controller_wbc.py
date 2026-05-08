@@ -7,6 +7,8 @@ import time
 import numpy as np
 import numpy.typing as npt
 
+from .utils import quat_to_rotmat
+
 from .pinnzoo_binding import PinnZooModel
 from .pinnzoo import M_func, inverse_dynamics
 
@@ -14,16 +16,12 @@ from .openarm_idx import (
     OPENARM_NQ,
     OPENARM_NV,
     OPENARM_NU,
-    OPENARM_WORLD_QUAT,
     OPENARM_U_BASE_VX,
     OPENARM_U_BASE_VY,
     OPENARM_U_BASE_WZ,
+    OPENARM_WORLD_QUAT,
 )
-from .utils import quat_to_rotmat
 
-
-FloatArray = npt.NDArray[np.float64]
-VelocityFrame = Literal["body", "world"]
 EnvType = Literal["sim", "real"]
 
 @dataclass(slots=True)
@@ -31,15 +29,14 @@ class MITCommand:
     """MIT motor command arrays in actuator order."""
 
     motor_names: list[str]
-    pos_des: FloatArray
-    vel_des: FloatArray
-    kp: FloatArray
-    kd: FloatArray
-    tau_ff: FloatArray
+    pos_des: npt.NDArray[np.float64]
+    vel_des: npt.NDArray[np.float64]
+    kp: npt.NDArray[np.float64]
+    kd: npt.NDArray[np.float64]
+    tau_ff: npt.NDArray[np.float64]
 
 @dataclass(slots=True)
 class LowLevelControllerConfig:
-    base_velocity_frame: VelocityFrame = "body"
     env_type: EnvType = "sim"
     
     wheel_radius_m: float = 0.052
@@ -48,7 +45,7 @@ class LowLevelControllerConfig:
     rl_pos_xy_m: tuple[float, float] = (-0.198,  0.13)
     rr_pos_xy_m: tuple[float, float] = (-0.198, -0.13)
 
-    min_module_speed_m_s: float = 1e-4
+    min_wheel_speed_m_s: float = 1e-4
 
     wheel_vel_limit_rad_s: float = 30.0
 
@@ -61,13 +58,13 @@ class LowLevelControllerConfig:
     base_idle_linear_threshold_m_s: float = 1e-2
     base_idle_angular_threshold_rad_s: float = 5e-2
     
-    arm_motor_kd: FloatArray | float = field(
+    arm_motor_kd: npt.NDArray[np.float64] | float = field(
         default_factory=lambda: np.array(
             [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0] * 2,
             dtype=np.float64,
         )
     )
-    arm_motor_kp: FloatArray | float = field(
+    arm_motor_kp: npt.NDArray[np.float64] | float = field(
         default_factory=lambda: np.array(
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0] * 2,
             dtype=np.float64,
@@ -166,9 +163,8 @@ class LowLevelController:
 
         self.num_motors = len(self.motor_names)
         self._prev_arm_vel_des = np.zeros(18, dtype=np.float64)
-        self._initialized = False
 
-        self._module_xy = np.array(
+        self._wheel_xy = np.array(
             [
                 self.config.fl_pos_xy_m,
                 self.config.fr_pos_xy_m,
@@ -186,25 +182,14 @@ class LowLevelController:
     
     def compute_arm_kd_from_mass_matrix(
         self,
-        x: FloatArray,
+        x: npt.NDArray[np.float64],
         zeta=0.7,
-        omega_n=8.0,
-        per_joint_omega=None,
+        omega=8.0,
     ):
         M = M_func(self.model, x)
         M_diag = np.diag(M)
-        
-        if per_joint_omega is not None:
-            omega = np.asarray(per_joint_omega)
-        else:
-            omega = omega_n
-            
         Kd = 2.0 * zeta * omega * np.sqrt(M_diag)
         return Kd[self._arm_qvel_idx]
-
-    def reset(self) -> None:
-        self._prev_arm_vel_des[:] = 0.0
-        self._initialized = False
 
     def _zero_command(self) -> MITCommand:
         zeros = np.zeros(self.num_motors, dtype=np.float64)
@@ -217,7 +202,12 @@ class LowLevelController:
             tau_ff=zeros.copy(),
         )
 
-    def update(self, qpos: FloatArray, qvel: FloatArray, u_des: FloatArray) -> MITCommand:
+    def update(
+        self,
+        qpos: npt.NDArray[np.float64],
+        qvel: npt.NDArray[np.float64],
+        u_des: npt.NDArray[np.float64]
+    ) -> MITCommand:
         qpos = np.asarray(qpos, dtype=np.float64)
         qvel = np.asarray(qvel, dtype=np.float64)
         u_des = np.asarray(u_des, dtype=np.float64)
@@ -229,49 +219,47 @@ class LowLevelController:
         if u_des.shape != (OPENARM_NU,):
             raise ValueError(f"u_des must have shape ({OPENARM_NU},), got {u_des.shape}")
         if not np.all(np.isfinite(qpos)) or not np.all(np.isfinite(qvel)) or not np.all(np.isfinite(u_des)):
-            self.reset()
+            self._prev_arm_vel_des[:] = 0.0
             return self._zero_command()
         
         arm_vel_des = u_des[3:]
 
         base_command_is_idle = self._is_base_command_idle(u_des)
-        steer_pos_des, wheel_vel_des = self._base_velocity_to_swerve_targets(
-            qpos=qpos,
-            u_cmd=u_des,
-        )
         
         if base_command_is_idle:
             steer_pos_des = qpos[self._steer_qpos_idx].copy()
-            wheel_vel_des = np.zeros_like(wheel_vel_des)
+            wheel_vel_des = np.zeros((4,), dtype=np.float64)
+        else:
+            steer_pos_des, wheel_vel_des = self._base_velocity_to_swerve_targets(
+                qpos=qpos,
+                u_cmd=u_des,
+            )
 
-        desired_act_acc = self._build_desired_actuator_acceleration(
+        acc_act_des = self._build_desired_actuator_acceleration(
             qpos=qpos,
             qvel=qvel,
             arm_vel_des=arm_vel_des,
         )
         
         x = np.concatenate([qpos, qvel])
-        desired_vdot = np.concatenate([np.zeros(6, dtype=np.float64), desired_act_acc])
+        acc_des = np.concatenate([np.zeros(6, dtype=np.float64), acc_act_des])
         tau_act = inverse_dynamics(
             model=self.model,
             x=x,
-            vdot=desired_vdot,
+            vdot=acc_des,
         )[6:]
         
+        if not np.all(np.isfinite(tau_act)):
+            self._prev_arm_vel_des[:] = 0.0
+            return self._zero_command()
+        
         want_move = np.abs(u_des[3:]) > 4e-2
-
         tau_bias = self.tau_static * want_move * np.sign(u_des[3:])
         tau_act[8:] += tau_bias
-        
-        if not np.all(np.isfinite(tau_act)):
-            self.reset()
-            return self._zero_command()
 
         tau_act[self._steer_act_idx] = 0.0
         tau_act[self._wheel_act_idx] = 0.0
         tau_act = np.clip(tau_act, self._tau_min, self._tau_max)
-
-        self._prev_arm_vel_des[:] = arm_vel_des
 
         pos_des = np.zeros(self.num_motors, dtype=np.float64)
         vel_des = np.zeros(self.num_motors, dtype=np.float64)
@@ -286,7 +274,6 @@ class LowLevelController:
             kp[self._steer_act_idx] = self.config.base_steering_kp
             kd[self._steer_act_idx] = self.config.base_steering_kd
             kd[self._wheel_act_idx] = self.config.base_wheel_kd
-
         kp[self._arm_act_idx] = self.config.arm_motor_kp
         kd[self._arm_act_idx] = self.config.arm_motor_kd
 
@@ -299,7 +286,10 @@ class LowLevelController:
             tau_ff=tau_act,
         )
 
-    def _is_base_command_idle(self, u_cmd: FloatArray) -> bool:
+    def _is_base_command_idle(
+        self,
+        u_cmd: npt.NDArray[np.float64]
+    ) -> bool:
         linear_speed = float(np.hypot(
             u_cmd[OPENARM_U_BASE_VX],
             u_cmd[OPENARM_U_BASE_VY],
@@ -313,48 +303,33 @@ class LowLevelController:
 
     def _base_velocity_to_swerve_targets(
         self,
-        qpos: FloatArray,
-        u_cmd: FloatArray,
-    ) -> tuple[FloatArray, FloatArray]:
+        qpos: npt.NDArray[np.float64],
+        u_cmd: npt.NDArray[np.float64],
+    ) -> tuple[npt.NDArray[np.float64], npt.NDArray[np.float64]]:
         vx = float(u_cmd[OPENARM_U_BASE_VX])
         vy = float(u_cmd[OPENARM_U_BASE_VY])
         wz = float(u_cmd[OPENARM_U_BASE_WZ])
 
-        if self.config.base_velocity_frame == "world":
-            rot_world_from_body = quat_to_rotmat(qpos[OPENARM_WORLD_QUAT])
-            v_body = rot_world_from_body.T @ np.array([vx, vy, 0.0], dtype=np.float64)
-            vx_body = float(v_body[0])
-            vy_body = float(v_body[1])
-        elif self.config.base_velocity_frame == "body":
-            vx_body = vx
-            vy_body = vy
-        else:
-            raise ValueError(f"Unsupported base_velocity_frame: {self.config.base_velocity_frame}")
-
         current_steer = qpos[self._steer_qpos_idx]
-        steer_pos_des = np.empty(4, dtype=np.float64)
-        wheel_vel_des = np.empty(4, dtype=np.float64)
+        steer_pos_des = current_steer.copy()
+        wheel_vel_des = np.zeros(4, dtype=np.float64)
 
-        for i, (module_x, module_y) in enumerate(self._module_xy):
-            module_vx = vx_body - wz * module_y
-            module_vy = vy_body + wz * module_x
-            module_speed = float(np.hypot(module_vx, module_vy))
+        for i, (wheel_x, wheel_y) in enumerate(self._wheel_xy):
+            wheel_vx = vx - wz * wheel_y
+            wheel_vy = vy + wz * wheel_x
+            wheel_speed = float(np.hypot(wheel_vx, wheel_vy))
 
-            if module_speed < self.config.min_module_speed_m_s:
-                target_angle = float(current_steer[i])
-                target_wheel_vel = 0.0
-            else:
-                raw_angle = float(np.arctan2(module_vy, module_vx))
-                raw_wheel_vel = module_speed / self.config.wheel_radius_m
-                target_angle, target_wheel_vel = self._optimize_steering_angle(
-                    raw_angle=raw_angle,
-                    raw_wheel_vel=raw_wheel_vel,
-                    current_angle=float(current_steer[i]),
-                )
-
-            steer_pos_des[i] = target_angle
-            wheel_vel_des[i] = target_wheel_vel
-
+            if wheel_speed < self.config.min_wheel_speed_m_s:
+                continue
+            
+            steer_pos_des[i] = float(np.arctan2(wheel_vy, wheel_vx))
+            wheel_vel_des[i] = wheel_speed / self.config.wheel_radius_m
+            
+            angle_err = self._wrap_to_pi(steer_pos_des[i] - current_steer[i])
+            if abs(angle_err) > 0.5 * np.pi:
+                steer_pos_des[i] = self._wrap_to_pi(steer_pos_des[i] + np.pi)
+                wheel_vel_des[i] *= -1.0
+                
         wheel_vel_des = np.clip(
             wheel_vel_des,
             -self.config.wheel_vel_limit_rad_s,
@@ -365,14 +340,13 @@ class LowLevelController:
 
     def _build_desired_actuator_acceleration(
         self,
-        qpos: FloatArray,
-        qvel: FloatArray,
-        arm_vel_des: FloatArray,
-    ) -> FloatArray:
-        acc = np.zeros(self.num_motors, dtype=np.float64)
-
+        qpos: npt.NDArray[np.float64],
+        qvel: npt.NDArray[np.float64],
+        arm_vel_des: npt.NDArray[np.float64],
+    ) -> npt.NDArray[np.float64]:
         dt = time.perf_counter() - self.prev_time
         arm_acc_ff = (arm_vel_des - self._prev_arm_vel_des) / dt
+        self._prev_arm_vel_des[:] = arm_vel_des
         self.prev_time = time.perf_counter()
         
         arm_vel_err = arm_vel_des - qvel[self._arm_qvel_idx]
@@ -382,9 +356,10 @@ class LowLevelController:
         KDs = self.compute_arm_kd_from_mass_matrix(
             x,
             zeta=0.7,
-            omega_n=8.0,
+            omega=8.0,
         )
         
+        acc = np.zeros(self.num_motors, dtype=np.float64)
         acc[self._arm_act_idx] = (
             arm_acc_ff + KDs * arm_vel_err
         )
@@ -393,26 +368,8 @@ class LowLevelController:
             -self.config.arm_acc_limit_rad_s2,
             self.config.arm_acc_limit_rad_s2,
         )
-
-        if not np.all(np.isfinite(acc)):
-            return np.zeros(self.num_motors, dtype=np.float64)
         return acc
 
     @staticmethod
-    def _wrap_to_pi(angle: FloatArray | float) -> FloatArray | float:
+    def _wrap_to_pi(angle: npt.NDArray[np.float64] | float):
         return (angle + np.pi) % (2.0 * np.pi) - np.pi
-
-    def _optimize_steering_angle(
-        self,
-        raw_angle: float,
-        raw_wheel_vel: float,
-        current_angle: float,
-    ) -> tuple[float, float]:
-        angle_error = float(self._wrap_to_pi(raw_angle - current_angle))
-        if abs(angle_error) > 0.5 * np.pi:
-            target_angle = float(self._wrap_to_pi(raw_angle + np.pi))
-            target_wheel_vel = -raw_wheel_vel
-        else:
-            target_angle = float(self._wrap_to_pi(raw_angle))
-            target_wheel_vel = raw_wheel_vel
-        return target_angle, target_wheel_vel
