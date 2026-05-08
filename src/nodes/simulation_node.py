@@ -69,9 +69,7 @@ class SimulationNode:
         self.mid_cmd = msg
 
     def low_state_callback(self, msg: LowState_):
-        for i in range(24):
-            state: 'MotorState_' = msg.motor_state[i] # type: ignore
-            self.qpos_sub[i] = state.q
+        self.qpos_sub[ACTUATOR_QPOS_IDX] = [state.q for state in msg.motor_state[:26]]
     
     @no_type_check
     def send_state(self):
