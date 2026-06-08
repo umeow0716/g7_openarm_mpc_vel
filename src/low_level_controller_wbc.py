@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 import time
@@ -20,6 +21,9 @@ from .openarm_idx import (
 )
 
 EnvType = Literal["sim", "real"]
+
+DEFAULT_LIB_PATH = Path(__file__).resolve().parent.parent / "include" / "libg7_openarm_quat.so"
+MIN_CONTROLLER_DT_S = 1e-3
 
 @dataclass(slots=True)
 class MITCommand:
@@ -152,11 +156,11 @@ class LowLevelController:
     def __init__(
         self,
         config: LowLevelControllerConfig | None = None,
-        lib_path: str = "include/libg7_openarm_quat.so",
+        lib_path: str | None = None,
     ) -> None:
         self.config = config if config is not None else LowLevelControllerConfig()
-        self.lib_path = lib_path
-        self.model = PinnZooModel(lib_path)
+        self.lib_path = str(DEFAULT_LIB_PATH if lib_path is None else lib_path)
+        self.model = PinnZooModel(self.lib_path)
 
         self.num_motors = len(self.motor_names)
         self._prev_arm_vel_des = np.zeros(18, dtype=np.float64)
@@ -341,10 +345,11 @@ class LowLevelController:
         qvel: npt.NDArray[np.float64],
         arm_vel_des: npt.NDArray[np.float64],
     ) -> npt.NDArray[np.float64]:
-        dt = time.perf_counter() - self.prev_time
+        now = time.perf_counter()
+        dt = max(now - self.prev_time, MIN_CONTROLLER_DT_S)
         arm_acc_ff = (arm_vel_des - self._prev_arm_vel_des) / dt
         self._prev_arm_vel_des[:] = arm_vel_des
-        self.prev_time = time.perf_counter()
+        self.prev_time = now
         
         arm_vel_err = arm_vel_des - qvel[self._arm_qvel_idx]
         

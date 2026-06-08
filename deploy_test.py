@@ -410,7 +410,7 @@ def main():
 
     try:
         while True:
-            time.sleep(10 ** 6)
+            time.sleep(1)
     except KeyboardInterrupt:
         pass
 

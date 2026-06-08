@@ -23,8 +23,7 @@ EnvType = Literal["real", "sim"]
 LEFT_EE_BODY = 'L_gripper_tcp_link'
 RIGHT_EE_BODY = 'R_gripper_tcp_link'
 
-ACTUATOR_QPOS_IDX = np.array([7, 9, 11, 13, 8, 10, 12, 14, *range(15, 33)], dtype=np.int32)
-ACTUATOR_QVEL_IDX = np.array([6, 8, 10, 12, 7, 9, 11, 13, *range(14, 32)], dtype=np.int32)
+from .actuator_mapping import ACTUATOR_QPOS_IDX, ACTUATOR_QVEL_IDX
 
 def wrap_to_pi(angle: np.ndarray | float) -> np.ndarray | float:
     return (angle + np.pi) % (2.0 * np.pi) - np.pi
@@ -36,11 +35,22 @@ class SimulationNode:
         
         self.low_cmd_sub: Optional[ChannelSubscriber] = None
         self.mid_cmd_sub: Optional[ChannelSubscriber] = None
+        self.low_state_sub: Optional[ChannelSubscriber] = None
+        self.sport_mode_state_sub: Optional[ChannelSubscriber] = None
         self.low_state_pub: Optional[ChannelPublisher] = None
         self.sport_mode_state_pub: Optional[ChannelPublisher] = None
         
+        # In sim mode this node is the SportModeState publisher (ground-truth state).
+        # In real mode this node never publishes SportModeState; SportNode should be used
+        # there to estimate and publish rt/sportmodestate from LowState + IMUState.
         self.target_msg_pub: ChannelPublisher = ChannelPublisher(target_msg_topic, TargetMsg)
         self.target_msg_pub.Init()
+
+        self.sim_init()
+        self.qpos_sub = self.data.qpos.copy()
+        self.qvel_sub = self.data.qvel.copy()
+        self.low_cmd: Optional[LowCmd_] = None
+        self.mid_cmd: Optional[MidCmd]  = None
 
         if self.env_type == "sim":
             self.low_cmd_sub = ChannelSubscriber(low_cmd_topic, LowCmd_)
@@ -54,14 +64,11 @@ class SimulationNode:
         elif self.env_type == "real":
             self.low_state_sub = ChannelSubscriber(low_state_topic, LowState_)
             self.low_state_sub.Init(self.low_state_callback, 10)
+            self.sport_mode_state_sub = ChannelSubscriber(sport_mode_state_topic, SportModeState_)
+            self.sport_mode_state_sub.Init(self.sport_mode_state_callback, 10)
         else:
             raise ValueError(f"Invalid env_type: {self.env_type}. Must be 'real' or 'sim'.")
         
-        self.sim_init()
-        self.qpos_sub = self.data.qpos.copy()
-        self.low_cmd: Optional[LowCmd_] = None
-        self.mid_cmd: Optional[MidCmd]  = None
-
     def low_cmd_callback(self, msg: LowCmd_):
         self.low_cmd = msg
     
@@ -70,19 +77,48 @@ class SimulationNode:
 
     def low_state_callback(self, msg: LowState_):
         self.qpos_sub[ACTUATOR_QPOS_IDX] = [state.q for state in msg.motor_state[:26]]
+        self.qvel_sub[ACTUATOR_QVEL_IDX] = [state.dq for state in msg.motor_state[:26]]
+
+    def sport_mode_state_callback(self, msg: SportModeState_):
+        self.qpos_sub[0] = float(msg.position[0])
+        self.qpos_sub[1] = float(msg.position[1])
+        self.qpos_sub[2] = float(msg.position[2])
+        self.qpos_sub[3] = float(msg.imu_state.quaternion[0])
+        self.qpos_sub[4] = float(msg.imu_state.quaternion[1])
+        self.qpos_sub[5] = float(msg.imu_state.quaternion[2])
+        self.qpos_sub[6] = float(msg.imu_state.quaternion[3])
+
+        self.qvel_sub[0] = float(msg.velocity[0])
+        self.qvel_sub[1] = float(msg.velocity[1])
+        self.qvel_sub[2] = float(msg.velocity[2])
+        self.qvel_sub[3] = float(msg.imu_state.gyroscope[0])
+        self.qvel_sub[4] = float(msg.imu_state.gyroscope[1])
+        self.qvel_sub[5] = float(msg.imu_state.gyroscope[2])
     
     @no_type_check
     def send_state(self):
         assert self.env_type == 'sim'
         
         sport_mode_state = SportModeState_default()
-        sport_mode_state.position = self.data.qpos[:3]
-        sport_mode_state.imu_state.quaternion = self.data.qpos[3:7]
+        sport_mode_state.position[0] = float(self.data.qpos[0])
+        sport_mode_state.position[1] = float(self.data.qpos[1])
+        sport_mode_state.position[2] = float(self.data.qpos[2])
+        sport_mode_state.velocity[0] = float(self.data.qvel[0])
+        sport_mode_state.velocity[1] = float(self.data.qvel[1])
+        sport_mode_state.velocity[2] = float(self.data.qvel[2])
+        sport_mode_state.imu_state.quaternion[0] = float(self.data.qpos[3])
+        sport_mode_state.imu_state.quaternion[1] = float(self.data.qpos[4])
+        sport_mode_state.imu_state.quaternion[2] = float(self.data.qpos[5])
+        sport_mode_state.imu_state.quaternion[3] = float(self.data.qpos[6])
+        sport_mode_state.imu_state.gyroscope[0] = float(self.data.qvel[3])
+        sport_mode_state.imu_state.gyroscope[1] = float(self.data.qvel[4])
+        sport_mode_state.imu_state.gyroscope[2] = float(self.data.qvel[5])
+        sport_mode_state.yaw_speed = float(self.data.qvel[5])
         
         low_state = LowState_default()
         for i in range(26):
-            low_state.motor_state[i].q  = self.data.qpos[7+i]
-            low_state.motor_state[i].dq = self.data.qvel[6+i]
+            low_state.motor_state[i].q = float(self.data.qpos[ACTUATOR_QPOS_IDX[i]])
+            low_state.motor_state[i].dq = float(self.data.qvel[ACTUATOR_QVEL_IDX[i]])
         
         self.sport_mode_state_pub.Write(sport_mode_state)
         self.low_state_pub.Write(low_state)
@@ -138,21 +174,22 @@ class SimulationNode:
             while viewer.is_running():
                 cycle_end_time = time.time() + self.model.opt.timestep
                 
-                if self.env_type == "sim" and self.low_cmd is not None and self.mid_cmd is not None:
+                if self.env_type == "sim" and self.low_cmd is not None:
                     kp, kd, q_des, dq_des, tau_ff = self.get_motor_des()
                     q_err  = q_des  - self.data.qpos[ACTUATOR_QPOS_IDX]
                     dq_err = dq_des - self.data.qvel[ACTUATOR_QVEL_IDX]
                     q_err[:4] = wrap_to_pi(q_err[:4])
 
                     self.data.ctrl[:] = kp * q_err + kd * dq_err + tau_ff
+                if self.env_type == "sim":
+                    mujoco.mj_step(self.model, self.data)
+                    self.send_state()
                 elif self.env_type == "real":
                     self.data.qpos[:] = self.qpos_sub[:]
-                
-                mujoco.mj_step(self.model, self.data)
+                    self.data.qvel[:] = self.qvel_sub[:]
+                    mujoco.mj_forward(self.model, self.data)
+
                 viewer.sync()
-                
-                if self.env_type == 'sim':
-                    self.send_state()
                 self.send_target()
                 
                 now = time.time()
@@ -161,7 +198,7 @@ class SimulationNode:
                     time.sleep(sleep_time)
     
     def sim_init(self):
-        self.spec = mujoco.MjSpec.from_file('g7_openarm_mujoco/scene.xml')
+        self.spec = mujoco.MjSpec.from_file(self.scene_file)
         
         self.left_target = self.spec.worldbody.add_body(
             name='left_target',

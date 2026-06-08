@@ -1,3 +1,4 @@
+import time
 import numpy as np
 
 from typing import TYPE_CHECKING, Optional
@@ -5,6 +6,7 @@ from typing import TYPE_CHECKING, Optional
 from ..low_level_controller_wbc import LowLevelController
 
 from .msg.mid_cmd import MidCmd
+from .actuator_mapping import ACTUATOR_TO_MODEL_JOINT_ORDER
 
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_, LowCmd_
@@ -14,10 +16,15 @@ from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher, Cha
 if TYPE_CHECKING:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_
 
+LOW_CTRL_RATE_HZ = 100.0
+
 class LowControllerNode:
-    def __init__(self, sport_mode_state_topic: str = "rt/sportmodestate", low_state_topic: str = "rt/lowstate", mid_cmd_topic: str = "rt/midcmd", low_cmd_topic: str = "rt/lowcmd"):
-        ChannelFactoryInitialize()
-        
+    def __init__(self,
+        sport_mode_state_topic: str = "rt/sportmodestate",
+        low_state_topic: str = "rt/lowstate",
+        mid_cmd_topic: str = "rt/midcmd",
+        low_cmd_topic: str = "rt/lowcmd"
+    ):
         self.sport_mode_state_subscriber = ChannelSubscriber(sport_mode_state_topic, SportModeState_)
         self.sport_mode_state_subscriber.Init(self.sport_mode_state_callback, 10)
 
@@ -50,44 +57,52 @@ class LowControllerNode:
             
         pos = np.array(self.sport_state.position, dtype=np.float64) # type: ignore
         quat = np.array(imu_state.quaternion, dtype=np.float64) # type: ignore
-        motor_q = np.concatenate([
-            [self.low_state.motor_state[i].q for i in range(8+7) ], # type: ignore
-            [0.0, 0.0],
-            [self.low_state.motor_state[i].q for i in range(8+9, 8+9+7) ], # type: ignore
-            [0.0, 0.0],
-        ], dtype=np.float64)
+        motor_q_actuator_order = np.array(
+            [self.low_state.motor_state[i].q for i in range(26)], # type: ignore
+            dtype=np.float64,
+        )
+        motor_q_model_order = motor_q_actuator_order[ACTUATOR_TO_MODEL_JOINT_ORDER]
         
-        return np.concatenate([pos, quat, motor_q])
+        return np.concatenate([pos, quat, motor_q_model_order])
     
     def make_dq(self):
         imu_state: 'IMUState_' = self.sport_state.imu_state # type: ignore
         
         vel = np.array(self.sport_state.velocity, dtype=np.float64) # type: ignore
         omega = np.array(imu_state.gyroscope, dtype=np.float64) # type: ignore
-        motor_dq = np.concatenate([
-            [self.low_state.motor_state[i].dq for i in range(8+7) ], # type: ignore
-            [0.0, 0.0],
-            [self.low_state.motor_state[i].dq for i in range(8+9, 8+9+7) ], # type: ignore
-            [0.0, 0.0],
-        ], dtype=np.float64)
+        motor_dq_actuator_order = np.array(
+            [self.low_state.motor_state[i].dq for i in range(26)], # type: ignore
+            dtype=np.float64,
+        )
+        motor_dq_model_order = motor_dq_actuator_order[ACTUATOR_TO_MODEL_JOINT_ORDER]
         
-        return np.concatenate([vel, omega, motor_dq])
+        return np.concatenate([vel, omega, motor_dq_model_order])
 
     def make_u(self):
         return np.array(self.mid_cmd.u, dtype=np.float64) # type: ignore
     
     def control_loop(self):
+        period = 1.0 / LOW_CTRL_RATE_HZ
+        next_t = time.perf_counter()
+
         while True:
             if self.sport_state is None or self.low_state is None or self.mid_cmd is None:
+                time.sleep(0.001)
                 continue
+
+            now = time.perf_counter()
+            if now < next_t:
+                time.sleep(next_t - now)
+                continue
+            next_t = now + period
             
             qpos = self.make_q()
             qvel = self.make_dq()
             u    = self.make_u()
             
-            assert qpos.shape == (33,) and np.isfinite(qpos).any()
-            assert qvel.shape == (32,) and np.isfinite(qvel).any()
-            assert u.shape    == (21,) and np.isfinite(u).any()
+            assert qpos.shape == (33,) and np.isfinite(qpos).all()
+            assert qvel.shape == (32,) and np.isfinite(qvel).all()
+            assert u.shape    == (21,) and np.isfinite(u).all()
             
             cmd  = self.controller.update(qpos, qvel, u)
             

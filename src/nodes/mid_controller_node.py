@@ -1,3 +1,4 @@
+import time
 import numpy as np
 import numpy.typing as npt
 
@@ -11,6 +12,9 @@ from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher, Cha
 
 from .msg.mid_cmd import MidCmd
 from .msg.target_msg import TargetMsg
+from .actuator_mapping import ACTUATOR_TO_MODEL_JOINT_ORDER
+
+MPC_RATE_HZ = 50.0
 
 if TYPE_CHECKING:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_
@@ -54,14 +58,13 @@ class MidControllerNode:
             
         pos = np.array(self.sport_state.position, dtype=np.float64) # type: ignore
         quat = np.array(imu_state.quaternion, dtype=np.float64) # type: ignore
-        motor_q = np.concatenate([
-            [self.low_state.motor_state[i].q for i in range(8+7) ], # type: ignore
-            [0.0, 0.0],
-            [self.low_state.motor_state[i].q for i in range(8+9, 8+9+7) ], # type: ignore
-            [0.0, 0.0],
-        ], dtype=np.float64)
+        motor_q_actuator_order = np.array(
+            [self.low_state.motor_state[i].q for i in range(26)], # type: ignore
+            dtype=np.float64,
+        )
+        motor_q_model_order = motor_q_actuator_order[ACTUATOR_TO_MODEL_JOINT_ORDER]
 
-        return np.concatenate([pos, quat, motor_q])
+        return np.concatenate([pos, quat, motor_q_model_order])
     
     def make_target(self):
         left_pos = np.array([self.target_msg.left.position.x, self.target_msg.left.position.y, self.target_msg.left.position.z], dtype=np.float64) # type: ignore
@@ -78,10 +81,19 @@ class MidControllerNode:
         U_init = np.zeros((self.mpc_solver.N, self.mpc_solver.nu), dtype=np.float64)
         max_iter = 10
         u_cmd = np.zeros((self.mpc_solver.nu,), dtype=np.float64)
+        period = 1.0 / MPC_RATE_HZ
+        next_t = time.perf_counter()
         
         while True:
             if self.sport_state is None or self.low_state is None or self.target_msg is None:
+                time.sleep(0.001)
                 continue
+
+            now = time.perf_counter()
+            if now < next_t:
+                time.sleep(next_t - now)
+                continue
+            next_t = now + period
 
             x = self.make_state()
             target = self.make_target()
@@ -97,8 +109,12 @@ class MidControllerNode:
                 shift_warm_start=True,
             )
             
-            U_init = U_sol.copy()
-            u_cmd = U_sol[0].copy()
+            if success and np.all(np.isfinite(U_sol)):
+                U_init = U_sol.copy()
+                u_cmd = U_sol[0].copy()
+            else:
+                U_init[:] = 0.0
+                u_cmd = np.zeros((self.mpc_solver.nu,), dtype=np.float64)
  
             self.send_mid_cmd(u_cmd)
 

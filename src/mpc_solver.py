@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
@@ -13,6 +14,8 @@ from .utils import (
     orientation_error_jacobian_wrt_quat_from_matrix,
     quat_error_matrix_from_target,
 )
+DEFAULT_LIB_PATH = Path(__file__).resolve().parent.parent / "include" / "libg7_openarm_quat.so"
+
 from .mpc_types import (
     TargetData,
     StateEvaluation,
@@ -25,9 +28,9 @@ from .mpc_types import (
 class OpenArmMPCSolver:
     def __init__(
         self,
-        lib_path: str = 'include/libg7_openarm_quat.so',
+        lib_path: str | None = None,
     ) -> None:
-        self.lib_path = lib_path
+        self.lib_path = str(DEFAULT_LIB_PATH if lib_path is None else lib_path)
         self.model = PinnZooModel(self.lib_path)
         self.dynamic = OpenArmDynamic(self.model)
 

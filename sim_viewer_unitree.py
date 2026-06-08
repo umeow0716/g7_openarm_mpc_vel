@@ -11,7 +11,7 @@ def main():
     process2 = Process(target=mid_controller_node.main)
     process2.start()
     
-    process3 = Process(target=simulation_node.main)
+    process3 = Process(target=simulation_node.main, args=('sim',))
     process3.start()
     
     def atexit_func():
@@ -23,7 +23,7 @@ def main():
     
     try:
         while True:
-            time.sleep(10 ** 6)
+            time.sleep(1)
     except KeyboardInterrupt:
         pass
 
