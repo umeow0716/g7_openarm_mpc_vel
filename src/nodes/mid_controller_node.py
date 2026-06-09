@@ -18,7 +18,7 @@ MPC_RATE_HZ = 50.0
 
 if TYPE_CHECKING:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_
-    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import MotorCmd_, MotorState_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import MotorState_
 
 class MidControllerNode:
     def __init__(self, sport_mode_state_topic: str = "rt/sportmodestate", low_state_topic: str = "rt/lowstate", mid_cmd_topic: str = "rt/midcmd", target_topic: str = "rt/targetmsg"):
