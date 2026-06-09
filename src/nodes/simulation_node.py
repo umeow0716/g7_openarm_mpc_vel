@@ -3,7 +3,7 @@ import numpy as np
 import mujoco
 import mujoco.viewer
 
-from typing import TYPE_CHECKING, Optional, no_type_check
+from typing import TYPE_CHECKING, Optional, MutableSequence, cast
 
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher, ChannelFactoryInitialize
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowState_ as LowState_default, unitree_go_msg_dds__SportModeState_ as SportModeState_default
@@ -76,54 +76,65 @@ class SimulationNode:
         self.mid_cmd = msg
 
     def low_state_callback(self, msg: LowState_):
-        self.qpos_sub[ACTUATOR_QPOS_IDX] = [state.q for state in msg.motor_state[:26]]
-        self.qvel_sub[ACTUATOR_QVEL_IDX] = [state.dq for state in msg.motor_state[:26]]
+        motor_state = cast(MutableSequence['MotorState_'], msg.motor_state)
+        self.qpos_sub[ACTUATOR_QPOS_IDX] = [state.q for state in motor_state[:26]]
+        self.qvel_sub[ACTUATOR_QVEL_IDX] = [state.dq for state in motor_state[:26]]
 
     def sport_mode_state_callback(self, msg: SportModeState_):
-        self.qpos_sub[0] = float(msg.position[0])
-        self.qpos_sub[1] = float(msg.position[1])
-        self.qpos_sub[2] = float(msg.position[2])
-        self.qpos_sub[3] = float(msg.imu_state.quaternion[0])
-        self.qpos_sub[4] = float(msg.imu_state.quaternion[1])
-        self.qpos_sub[5] = float(msg.imu_state.quaternion[2])
-        self.qpos_sub[6] = float(msg.imu_state.quaternion[3])
-
-        self.qvel_sub[0] = float(msg.velocity[0])
-        self.qvel_sub[1] = float(msg.velocity[1])
-        self.qvel_sub[2] = float(msg.velocity[2])
-        self.qvel_sub[3] = float(msg.imu_state.gyroscope[0])
-        self.qvel_sub[4] = float(msg.imu_state.gyroscope[1])
-        self.qvel_sub[5] = float(msg.imu_state.gyroscope[2])
-    
-    @no_type_check
-    def send_state(self):
-        assert self.env_type == 'sim'
+        msg_pos  = cast(MutableSequence[float], msg.position)
+        msg_vel  = cast(MutableSequence[float], msg.velocity)
+        msg_quat = cast(MutableSequence[float], msg.imu_state.quaternion)
+        msg_gyro = cast(MutableSequence[float], msg.imu_state.gyroscope)
+        msg.imu_state
         
+        self.qpos_sub[0] = float(msg_pos[0])
+        self.qpos_sub[1] = float(msg_pos[1])
+        self.qpos_sub[2] = float(msg_pos[2])
+        self.qpos_sub[3] = float(msg_quat[0])
+        self.qpos_sub[4] = float(msg_quat[1])
+        self.qpos_sub[5] = float(msg_quat[2])
+        self.qpos_sub[6] = float(msg_quat[3])
+
+        self.qvel_sub[0] = float(msg_vel[0])
+        self.qvel_sub[1] = float(msg_vel[1])
+        self.qvel_sub[2] = float(msg_vel[2])
+        self.qvel_sub[3] = float(msg_gyro[0])
+        self.qvel_sub[4] = float(msg_gyro[1])
+        self.qvel_sub[5] = float(msg_gyro[2])
+    
+    def send_state(self):
+        assert self.env_type == 'sim' and self.sport_mode_state_pub and self.low_state_pub
         sport_mode_state = SportModeState_default()
-        sport_mode_state.position[0] = float(self.data.qpos[0])
-        sport_mode_state.position[1] = float(self.data.qpos[1])
-        sport_mode_state.position[2] = float(self.data.qpos[2])
-        sport_mode_state.velocity[0] = float(self.data.qvel[0])
-        sport_mode_state.velocity[1] = float(self.data.qvel[1])
-        sport_mode_state.velocity[2] = float(self.data.qvel[2])
-        sport_mode_state.imu_state.quaternion[0] = float(self.data.qpos[3])
-        sport_mode_state.imu_state.quaternion[1] = float(self.data.qpos[4])
-        sport_mode_state.imu_state.quaternion[2] = float(self.data.qpos[5])
-        sport_mode_state.imu_state.quaternion[3] = float(self.data.qpos[6])
-        sport_mode_state.imu_state.gyroscope[0] = float(self.data.qvel[3])
-        sport_mode_state.imu_state.gyroscope[1] = float(self.data.qvel[4])
-        sport_mode_state.imu_state.gyroscope[2] = float(self.data.qvel[5])
+        
+        pos  = cast(MutableSequence[float], sport_mode_state.position)
+        vel  = cast(MutableSequence[float], sport_mode_state.velocity)
+        quat = cast(MutableSequence[float], sport_mode_state.imu_state.quaternion)
+        gyro = cast(MutableSequence[float], sport_mode_state.imu_state.gyroscope)
+        
+        pos[0] = float(self.data.qpos[0])
+        pos[1] = float(self.data.qpos[1])
+        pos[2] = float(self.data.qpos[2])
+        vel[0] = float(self.data.qvel[0])
+        vel[1] = float(self.data.qvel[1])
+        vel[2] = float(self.data.qvel[2])
+        quat[0] = float(self.data.qpos[3])
+        quat[1] = float(self.data.qpos[4])
+        quat[2] = float(self.data.qpos[5])
+        quat[3] = float(self.data.qpos[6])
+        gyro[0] = float(self.data.qvel[3])
+        gyro[1] = float(self.data.qvel[4])
+        gyro[2] = float(self.data.qvel[5])
         sport_mode_state.yaw_speed = float(self.data.qvel[5])
         
         low_state = LowState_default()
+        motor_state = cast(MutableSequence['MotorState_'], low_state.motor_state)
         for i in range(26):
-            low_state.motor_state[i].q = float(self.data.qpos[ACTUATOR_QPOS_IDX[i]])
-            low_state.motor_state[i].dq = float(self.data.qvel[ACTUATOR_QVEL_IDX[i]])
+            motor_state[i].q = float(self.data.qpos[ACTUATOR_QPOS_IDX[i]])
+            motor_state[i].dq = float(self.data.qvel[ACTUATOR_QVEL_IDX[i]])
         
         self.sport_mode_state_pub.Write(sport_mode_state)
         self.low_state_pub.Write(low_state)
     
-    @no_type_check
     def send_target(self):
         left_target_pos = self.data.body('left_target').xpos.copy()
         left_target_quat = self.data.body('left_target').xquat.copy()
@@ -151,7 +162,6 @@ class SimulationNode:
         
         self.target_msg_pub.Write(target_msg)
 
-    @no_type_check
     def get_motor_des(self):
         assert self.low_cmd is not None
         
@@ -161,7 +171,8 @@ class SimulationNode:
         dq_des = np.zeros((26,), dtype=np.float64)
         tau_ff = np.zeros((26,), dtype=np.float64)
         
-        for i, cmd in enumerate(self.low_cmd.motor_cmd[:26]):
+        motor_cmd = cast(MutableSequence['MotorCmd_'], self.low_cmd.motor_cmd)
+        for i, cmd in enumerate(motor_cmd[:26]):
             kp[i]     = cmd.kp
             kd[i]     = cmd.kd
             q_des[i]  = cmd.q
