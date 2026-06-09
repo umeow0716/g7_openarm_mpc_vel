@@ -115,6 +115,9 @@ class ControlNode:
         motor_cmd   = cast(MutableSequence['MotorCmd_'], self.low_cmd.motor_cmd)
         motor_state = cast(MutableSequence['MotorState_'], self.low_state.motor_state)
         
+        left_reversed_ids = [0, 1, 3, 5, 6]
+        right_reversed_ids = [1, 3, 5]
+        
         wheel_cmd_dq = np.array(
             [
                 apply_scalar_deadband(
@@ -162,7 +165,26 @@ class ControlNode:
                 kd=motor_cmd[cmd_idx].kd,
                 tau=motor_cmd[cmd_idx].tau,
             )
+            if cmd_idx in left_reversed_ids:
+                motor_cmd[cmd_idx].q *= -1.0
+                motor_cmd[cmd_idx].dq *= -1.0
+                motor_cmd[cmd_idx].tau *= -1.0
             self.left_hand_controller.get_arm().mit_control_one(i, param)
+        
+        for i, motor in enumerate(self.right_hand_controller.get_arm().get_motors()):
+            cmd_idx = int(RIGHT_HAND_PHYSICAL_CMD_IDX[i])
+            param = oa.MITParam(
+                q=motor_cmd[cmd_idx].q,
+                dq=motor_cmd[cmd_idx].dq,
+                kp=motor_cmd[cmd_idx].kp,
+                kd=motor_cmd[cmd_idx].kd,
+                tau=motor_cmd[cmd_idx].tau,
+            )
+            if cmd_idx in right_reversed_ids:
+                motor_cmd[cmd_idx].q *= -1.0
+                motor_cmd[cmd_idx].dq *= -1.0
+                motor_cmd[cmd_idx].tau *= -1.0
+            self.right_hand_controller.get_arm().mit_control_one(i, param)
         
         self.wheel_controller.refresh_all()
         self.left_hand_controller.refresh_all()
@@ -190,12 +212,20 @@ class ControlNode:
             motor_state[idx].q = float(motor.get_position())
             motor_state[idx].dq = float(motor.get_velocity())
             motor_state[idx].tau_est = float(motor.get_torque())
+            if i in left_reversed_ids:
+                motor_state[idx].q *= -1.0
+                motor_state[idx].dq *= -1.0
+                motor_state[idx].tau_est *= -1.0
 
         for i, motor in enumerate(self.right_hand_controller.get_arm().get_motors()):
             idx = int(RIGHT_HAND_PHYSICAL_CMD_IDX[i])
             motor_state[idx].q = float(motor.get_position())
             motor_state[idx].dq = float(motor.get_velocity())
             motor_state[idx].tau_est = float(motor.get_torque())
+            if i in right_reversed_ids:
+                motor_state[idx].q *= -1.0
+                motor_state[idx].dq *= -1.0
+                motor_state[idx].tau_est *= -1.0
 
         self.low_state_pub.Write(self.low_state)
             
