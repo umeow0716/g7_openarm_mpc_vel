@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 # Commands below this threshold are treated as stopped wheels.
 WHEEL_OMEGA_DEADBAND = 0.4
 STEERING_HOLD_VEL = 0.0
-STEERING_MOVE_VEL = 20.0
+STEERING_MOVE_VEL = 1.5
 
 
 def apply_scalar_deadband(value: float, threshold: float) -> float:
