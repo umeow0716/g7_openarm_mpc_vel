@@ -1,24 +1,27 @@
 import time
-import typing
 import numpy as np
 
+from typing import Optional, TYPE_CHECKING, cast, MutableSequence
 from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelPublisher, ChannelSubscriber
 from unitree_sdk2py.utils.thread import RecurrentThread
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_, SportModeState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_
 
 from unitree_sdk2py.idl.default import \
-    unitree_go_msg_dds__IMUState_ as IMUState_default, \
-    unitree_go_msg_dds__SportModeState_ as SportModeState_default, \
-    unitree_hg_msg_dds__LowState_ as LowState_default
+    unitree_go_msg_dds__SportModeState_ as SportModeState_default
     
 from ..ekf_localization import AMREKF
 from ..swerve_kinematics import SwerveKinematics
 from ..config import RobotConfig
 
+if TYPE_CHECKING:
+    from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import MotorState_
+    
+
 DT_TARGET = 0.01
 STATE_TIMEOUT_S = 0.2
-WHEEL_OMEGA_DEADBAND = 0.2
+WHEEL_OMEGA_DEADBAND = 0.4
 VX_DEADBAND = 0.005
 VY_DEADBAND = 0.005
 WZ_DEADBAND = 0.01
@@ -51,17 +54,17 @@ class SportNode:
         self.sport_mode_state_pub = ChannelPublisher(sport_state_mode_topic, SportModeState_)
         self.sport_mode_state_pub.Init()
         
-        self.low_state: typing.Optional[LowState_] = None
-        self.imu_state: typing.Optional[IMUState_] = None
+        self.low_state: Optional[LowState_] = None
+        self.imu_state: Optional[IMUState_] = None
         self.sport_mode_state = SportModeState_default()
         
         self.position = np.zeros((3,), dtype=np.float64)
         self.velocity = np.zeros((3,), dtype=np.float64)
         
-        self.last_loop_t: typing.Optional[float] = None
-        self.last_low_state_t: typing.Optional[float] = None
-        self.last_imu_state_t: typing.Optional[float] = None
-        self.yaw_zero: typing.Optional[float] = None
+        self.last_loop_t: Optional[float] = None
+        self.last_low_state_t: Optional[float] = None
+        self.last_imu_state_t: Optional[float] = None
+        self.yaw_zero: Optional[float] = None
         
         self.lowCmdWriteThreadPtr = RecurrentThread(
             interval=DT_TARGET, target=self.control_loop, name="sport"
@@ -79,6 +82,8 @@ class SportNode:
     def control_loop(self):
         if self.low_state is None or self.imu_state is None:
             return
+        
+        motor_state = cast(MutableSequence['MotorState_'], self.low_state.motor_state)
 
         now = time.perf_counter()
         if (
@@ -96,16 +101,18 @@ class SportNode:
         if dt < DT_TARGET:
             return
         
-        steering_angles = [
-            self.low_state.motor_state[i].q for i in range(4)
-        ]
-        wheel_omegas = [
+        steering_angles = np.array([
+            motor_state[i].q for i in range(4)
+        ], dtype=np.float64)
+        
+        wheel_omegas = np.array([
             apply_scalar_deadband(
-                self.low_state.motor_state[i].dq,
+                motor_state[i].dq,
                 WHEEL_OMEGA_DEADBAND,
             )
             for i in range(4, 8)
-        ]
+        ], dtype=np.float64)
+        
         vx_odom, vy_odom, wz_odom = self.swerve_kin.forward(steering_angles, wheel_omegas)
         vx_odom = apply_scalar_deadband(vx_odom, VX_DEADBAND)
         vy_odom = apply_scalar_deadband(vy_odom, VY_DEADBAND)
@@ -113,8 +120,10 @@ class SportNode:
 
         self.ekf.predict_wheel(vx_odom, vy_odom, wz_odom, dt)
 
-        gyro_z_meas = float(self.imu_state.gyroscope[2])
-        yaw_raw = float(self.imu_state.rpy[2])
+        gyro = cast(MutableSequence[float], self.imu_state.gyroscope)
+        rpy  = cast(MutableSequence[float], self.imu_state.rpy)
+        gyro_z_meas = float(gyro[2])
+        yaw_raw = float(rpy[2])
 
         if np.isfinite(gyro_z_meas):
             self.ekf.update_gyro_z(gyro_z_meas, wz_odom)
@@ -130,13 +139,16 @@ class SportNode:
         px, py, _yaw = self.ekf.pose
         vx, vy, wz   = self.ekf.global_velocity
         
-        self.sport_mode_state.position[0] = px
-        self.sport_mode_state.position[1] = py
-        self.sport_mode_state.position[2] = 0.0
-        self.sport_mode_state.velocity[0] = vx
-        self.sport_mode_state.velocity[1] = vy
-        self.sport_mode_state.yaw_speed   = wz
-        self.sport_mode_state.imu_state   = self.imu_state
+        pos_state = cast(MutableSequence[float], self.sport_mode_state.position)
+        vel_state = cast(MutableSequence[float], self.sport_mode_state.velocity)
+        pos_state[0] = px
+        pos_state[1] = py
+        pos_state[2] = 0.0
+        vel_state[0] = vx
+        vel_state[1] = vy
+        vel_state[2] = 0.0
+        self.sport_mode_state.yaw_speed = wz
+        self.sport_mode_state.imu_state = self.imu_state
         self.sport_mode_state_pub.Write(self.sport_mode_state)
 
         self.last_loop_t = now
