@@ -196,9 +196,9 @@ class ControlNode:
         for i, motor in enumerate(self.wheel_controller.get_arm().get_motors()[4:]):
             idx = 4 + i
             sign = self.drive_signs[i]
-            motor_state[idx].q = float(motor.get_position()) * sign
-            motor_state[idx].dq = float(motor.get_velocity()) * sign
-            motor_state[idx].tau_est = float(motor.get_torque()) * sign
+            motor_state[idx].q = float(motor.get_position() * sign)
+            motor_state[idx].dq = float(motor.get_velocity() * sign) 
+            motor_state[idx].tau_est = float(motor.get_torque() * sign)
 
         for i, motor in enumerate(self.left_hand_controller.get_arm().get_motors()):
             idx = int(LEFT_HAND_PHYSICAL_CMD_IDX[i])
