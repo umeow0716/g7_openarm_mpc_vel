@@ -46,7 +46,54 @@ class SimulationNode:
         self.target_msg_pub: ChannelPublisher = ChannelPublisher(target_msg_topic, TargetMsg)
         self.target_msg_pub.Init()
 
-        self.sim_init()
+        self.spec = mujoco.MjSpec.from_file(self.scene_file)
+        
+        self.left_target = self.spec.worldbody.add_body(
+            name='left_target',
+            mocap=True,
+            pos=[0.0, 0.0, 0.0],
+            quat=[1.0, 0.0, 0.0, 0.0],
+        )
+        self.left_target.add_geom(
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            size=[0.05],
+            rgba=[1, 0, 0, 0.3],
+            contype=0,
+            conaffinity=0,
+        )
+
+        self.right_target = self.spec.worldbody.add_body(
+            name='right_target',
+            mocap=True,
+            pos=[0.0, 0.0, 0.0],
+            quat=[1.0, 0.0, 0.0, 0.0],
+        )
+        self.right_target.add_geom(
+            type=mujoco.mjtGeom.mjGEOM_SPHERE,
+            size=[0.05],
+            rgba=[0, 0, 1, 0.3],
+            contype=0,
+            conaffinity=0,
+        )
+        
+        self.model: mujoco.MjModel = self.spec.compile()
+        self.data  = mujoco.MjData(self.model)
+        self.data.qpos[2] = 0.0
+        
+        mujoco.mj_forward(self.model, self.data)
+        
+        left_hand_pos = self.data.body(LEFT_EE_BODY).xpos.copy()
+        right_hand_pos = self.data.body(RIGHT_EE_BODY).xpos.copy()
+        left_hand_quat = self.data.body(LEFT_EE_BODY).xquat.copy()
+        right_hand_quat = self.data.body(RIGHT_EE_BODY).xquat.copy()
+        
+        left_target_mocap_id = self.model.body_mocapid[self.model.body('left_target').id]
+        right_target_mocap_id = self.model.body_mocapid[self.model.body('right_target').id]
+
+        self.data.mocap_pos[left_target_mocap_id] = left_hand_pos
+        self.data.mocap_quat[left_target_mocap_id] = left_hand_quat
+        self.data.mocap_pos[right_target_mocap_id] = right_hand_pos
+        self.data.mocap_quat[right_target_mocap_id] = right_hand_quat
         self.qpos_sub = self.data.qpos.copy()
         self.qvel_sub = self.data.qvel.copy()
         self.low_cmd: Optional[LowCmd_] = None
@@ -207,55 +254,6 @@ class SimulationNode:
                 sleep_time = cycle_end_time - now
                 if sleep_time > 0:
                     time.sleep(sleep_time)
-    
-    def sim_init(self):
-        self.spec = mujoco.MjSpec.from_file(self.scene_file)
-        
-        self.left_target = self.spec.worldbody.add_body(
-            name='left_target',
-            mocap=True,
-            pos=[0.0, 0.0, 0.0],
-            quat=[1.0, 0.0, 0.0, 0.0],
-        )
-        self.left_target.add_geom(
-            type=mujoco.mjtGeom.mjGEOM_SPHERE,
-            size=[0.05],
-            rgba=[1, 0, 0, 0.3],
-            contype=0,
-            conaffinity=0,
-        )
-
-        self.right_target = self.spec.worldbody.add_body(
-            name='right_target',
-            mocap=True,
-            pos=[0.0, 0.0, 0.0],
-            quat=[1.0, 0.0, 0.0, 0.0],
-        )
-        self.right_target.add_geom(
-            type=mujoco.mjtGeom.mjGEOM_SPHERE,
-            size=[0.05],
-            rgba=[0, 0, 1, 0.3],
-            contype=0,
-            conaffinity=0,
-        )
-        
-        self.model = self.spec.compile()
-        self.data  = mujoco.MjData(self.model)
-        
-        mujoco.mj_forward(self.model, self.data)
-        
-        left_hand_pos = self.data.body(LEFT_EE_BODY).xpos.copy()
-        right_hand_pos = self.data.body(RIGHT_EE_BODY).xpos.copy()
-        left_hand_quat = self.data.body(LEFT_EE_BODY).xquat.copy()
-        right_hand_quat = self.data.body(RIGHT_EE_BODY).xquat.copy()
-        
-        left_target_mocap_id = self.model.body_mocapid[self.model.body('left_target').id]
-        right_target_mocap_id = self.model.body_mocapid[self.model.body('right_target').id]
-
-        self.data.mocap_pos[left_target_mocap_id] = left_hand_pos
-        self.data.mocap_quat[left_target_mocap_id] = left_hand_quat
-        self.data.mocap_pos[right_target_mocap_id] = right_hand_pos
-        self.data.mocap_quat[right_target_mocap_id] = right_hand_quat
 
 def main(env_type: EnvType = 'sim'):
     ChannelFactoryInitialize()
