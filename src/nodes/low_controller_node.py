@@ -8,6 +8,7 @@ from ..low_level_controller_wbc import LowLevelController
 from .msg.mid_cmd import MidCmd
 from .actuator_mapping import ACTUATOR_TO_MODEL_JOINT_ORDER
 
+from typing import MutableSequence, cast
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import SportModeState_
 from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowState_, LowCmd_
 from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_ as LowCmd_default
@@ -15,6 +16,7 @@ from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher, Cha
 
 if TYPE_CHECKING:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import MotorCmd_, MotorState_
 
 LOW_CTRL_RATE_HZ = 100.0
 
@@ -53,12 +55,15 @@ class LowControllerNode:
         self.mid_cmd = msg
 
     def make_q(self):
-        imu_state: 'IMUState_' = self.sport_state.imu_state # type: ignore
+        assert self.sport_state is not None and self.low_state is not None
+        
+        imu_state: 'IMUState_' = self.sport_state.imu_state
+        motor_state = cast(MutableSequence['MotorState_'], self.low_state.motor_state)
             
-        pos = np.array(self.sport_state.position, dtype=np.float64) # type: ignore
-        quat = np.array(imu_state.quaternion, dtype=np.float64) # type: ignore
+        pos = np.array(self.sport_state.position, dtype=np.float64) 
+        quat = np.array(imu_state.quaternion, dtype=np.float64) 
         motor_q_actuator_order = np.array(
-            [self.low_state.motor_state[i].q for i in range(26)], # type: ignore
+            [motor_state[i].q for i in range(26)],
             dtype=np.float64,
         )
         motor_q_model_order = motor_q_actuator_order[ACTUATOR_TO_MODEL_JOINT_ORDER]
@@ -66,20 +71,20 @@ class LowControllerNode:
         return np.concatenate([pos, quat, motor_q_model_order])
     
     def make_dq(self):
-        imu_state: 'IMUState_' = self.sport_state.imu_state # type: ignore
+        assert self.sport_state is not None and self.low_state is not None
         
-        vel = np.array(self.sport_state.velocity, dtype=np.float64) # type: ignore
-        omega = np.array(imu_state.gyroscope, dtype=np.float64) # type: ignore
+        imu_state: 'IMUState_' = self.sport_state.imu_state 
+        motor_state = cast(MutableSequence['MotorState_'], self.low_state.motor_state)
+        
+        vel = np.array(self.sport_state.velocity, dtype=np.float64) 
+        omega = np.array(imu_state.gyroscope, dtype=np.float64) 
         motor_dq_actuator_order = np.array(
-            [self.low_state.motor_state[i].dq for i in range(26)], # type: ignore
+            [motor_state[i].dq for i in range(26)], 
             dtype=np.float64,
         )
         motor_dq_model_order = motor_dq_actuator_order[ACTUATOR_TO_MODEL_JOINT_ORDER]
         
         return np.concatenate([vel, omega, motor_dq_model_order])
-
-    def make_u(self):
-        return np.array(self.mid_cmd.u, dtype=np.float64) # type: ignore
     
     def control_loop(self):
         period = 1.0 / LOW_CTRL_RATE_HZ
@@ -98,7 +103,7 @@ class LowControllerNode:
             
             qpos = self.make_q()
             qvel = self.make_dq()
-            u    = self.make_u()
+            u    = np.array(self.mid_cmd.u, dtype=np.float64) 
             
             assert qpos.shape == (33,) and np.isfinite(qpos).all()
             assert qvel.shape == (32,) and np.isfinite(qvel).all()
@@ -107,13 +112,14 @@ class LowControllerNode:
             cmd  = self.controller.update(qpos, qvel, u)
             
             low_cmd = LowCmd_default()
+            motor_cmd = cast(MutableSequence['MotorCmd_'], low_cmd.motor_cmd)
             
             for i in range(26):
-                low_cmd.motor_cmd[i].q   = cmd.pos_des[i] # type: ignore
-                low_cmd.motor_cmd[i].dq  = cmd.vel_des[i] # type: ignore
-                low_cmd.motor_cmd[i].kp  = cmd.kp[i] # type: ignore
-                low_cmd.motor_cmd[i].kd  = cmd.kd[i] # type: ignore
-                low_cmd.motor_cmd[i].tau = cmd.tau_ff[i] # type: ignore
+                motor_cmd[i].q   = cmd.pos_des[i] 
+                motor_cmd[i].dq  = cmd.vel_des[i] 
+                motor_cmd[i].kp  = cmd.kp[i] 
+                motor_cmd[i].kd  = cmd.kd[i] 
+                motor_cmd[i].tau = cmd.tau_ff[i] 
             
             self.low_cmd_pub.Write(low_cmd)
 

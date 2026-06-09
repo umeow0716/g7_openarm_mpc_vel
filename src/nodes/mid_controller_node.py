@@ -2,7 +2,7 @@ import time
 import numpy as np
 import numpy.typing as npt
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, cast, MutableSequence
 
 from ..mpc_solver import OpenArmMPCSolver
 
@@ -18,6 +18,7 @@ MPC_RATE_HZ = 50.0
 
 if TYPE_CHECKING:
     from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import MotorCmd_, MotorState_
 
 class MidControllerNode:
     def __init__(self, sport_mode_state_topic: str = "rt/sportmodestate", low_state_topic: str = "rt/lowstate", mid_cmd_topic: str = "rt/midcmd", target_topic: str = "rt/targetmsg"):
@@ -50,16 +51,19 @@ class MidControllerNode:
         self.low_state = msg
     
     def send_mid_cmd(self, u_cmd: npt.NDArray[np.float64]):
-        mid_cmd = MidCmd(u_cmd) # type: ignore
+        mid_cmd = MidCmd(u_cmd.tolist())
         self.mid_cmd_pub.Write(mid_cmd)
     
     def make_state(self):
-        imu_state: IMUState_ = self.sport_state.imu_state # type: ignore
+        assert self.sport_state is not None and self.low_state is not None
+        
+        imu_state: IMUState_ = self.sport_state.imu_state 
+        motor_state = cast(MutableSequence['MotorState_'], self.low_state.motor_state)
             
-        pos = np.array(self.sport_state.position, dtype=np.float64) # type: ignore
-        quat = np.array(imu_state.quaternion, dtype=np.float64) # type: ignore
+        pos = np.array(self.sport_state.position, dtype=np.float64) 
+        quat = np.array(imu_state.quaternion, dtype=np.float64) 
         motor_q_actuator_order = np.array(
-            [self.low_state.motor_state[i].q for i in range(26)], # type: ignore
+            [motor_state[i].q for i in range(26)], 
             dtype=np.float64,
         )
         motor_q_model_order = motor_q_actuator_order[ACTUATOR_TO_MODEL_JOINT_ORDER]
@@ -67,10 +71,12 @@ class MidControllerNode:
         return np.concatenate([pos, quat, motor_q_model_order])
     
     def make_target(self):
-        left_pos = np.array([self.target_msg.left.position.x, self.target_msg.left.position.y, self.target_msg.left.position.z], dtype=np.float64) # type: ignore
-        left_quat = np.array([self.target_msg.left.orientation.w, self.target_msg.left.orientation.x, self.target_msg.left.orientation.y, self.target_msg.left.orientation.z], dtype=np.float64) # type: ignore
-        right_pos = np.array([self.target_msg.right.position.x, self.target_msg.right.position.y, self.target_msg.right.position.z], dtype=np.float64) # type: ignore
-        right_quat = np.array([self.target_msg.right.orientation.w, self.target_msg.right.orientation.x, self.target_msg.right.orientation.y, self.target_msg.right.orientation.z], dtype=np.float64) # type: ignore
+        assert self.target_msg is not None
+        
+        left_pos = np.array([self.target_msg.left.position.x, self.target_msg.left.position.y, self.target_msg.left.position.z], dtype=np.float64) 
+        left_quat = np.array([self.target_msg.left.orientation.w, self.target_msg.left.orientation.x, self.target_msg.left.orientation.y, self.target_msg.left.orientation.z], dtype=np.float64) 
+        right_pos = np.array([self.target_msg.right.position.x, self.target_msg.right.position.y, self.target_msg.right.position.z], dtype=np.float64) 
+        right_quat = np.array([self.target_msg.right.orientation.w, self.target_msg.right.orientation.x, self.target_msg.right.orientation.y, self.target_msg.right.orientation.z], dtype=np.float64) 
         
         return np.concatenate([
             left_pos, left_quat,

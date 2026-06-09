@@ -1,6 +1,7 @@
 import time
 import numpy as np
 
+from typing import MutableSequence, cast, TYPE_CHECKING
 from damiao_motor import DaMiaoController
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher, ChannelFactoryInitialize
 from unitree_sdk2py.utils.thread import RecurrentThread
@@ -17,6 +18,9 @@ from .actuator_mapping import (
     RIGHT_HAND_PHYSICAL_CMD_IDX,
     RIGHT_HAND_MIRROR_STATE_IDX,
 )
+
+if TYPE_CHECKING:
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import MotorCmd_, MotorState_
 
 # Keep this consistent with sport_node.py.
 # Commands below this threshold are treated as stopped wheels.
@@ -116,10 +120,13 @@ class ControlNode:
         self.low_cmd = msg
     
     def control_loop(self):
+        motor_cmd   = cast(MutableSequence['MotorCmd_'], self.low_cmd.motor_cmd)
+        motor_state = cast(MutableSequence['MotorState_'], self.low_state.motor_state)
+        
         wheel_cmd_dq = np.array(
             [
                 apply_scalar_deadband(
-                    self.low_cmd.motor_cmd[4 + i].dq,  # type: ignore
+                    motor_cmd[4 + i].dq,
                     WHEEL_OMEGA_DEADBAND,
                 )
                 for i in range(4)
@@ -134,7 +141,7 @@ class ControlNode:
                 steer_vel = STEERING_HOLD_VEL
             else:
                 steer_target_raw = (
-                    self.low_cmd.motor_cmd[i].q * self.steering_signs[i]  # type: ignore
+                    motor_cmd[i].q * self.steering_signs[i]
                 )
                 steer_vel = STEERING_MOVE_VEL
 
@@ -151,56 +158,47 @@ class ControlNode:
         for i, motor in enumerate(self.left_hand_motors):
             cmd_idx = int(LEFT_HAND_PHYSICAL_CMD_IDX[i])
             motor.send_cmd_mit(
-                self.low_cmd.motor_cmd[cmd_idx].q,   # type: ignore
-                self.low_cmd.motor_cmd[cmd_idx].dq,  # type: ignore
-                self.low_cmd.motor_cmd[cmd_idx].kp,  # type: ignore
-                self.low_cmd.motor_cmd[cmd_idx].kd,  # type: ignore
-                self.low_cmd.motor_cmd[cmd_idx].tau, # type: ignore
-            )
-        for i, motor in enumerate(self.right_hand_motors):
-            cmd_idx = int(RIGHT_HAND_PHYSICAL_CMD_IDX[i])
-            motor.send_cmd_mit(
-                self.low_cmd.motor_cmd[cmd_idx].q,   # type: ignore
-                self.low_cmd.motor_cmd[cmd_idx].dq,  # type: ignore
-                self.low_cmd.motor_cmd[cmd_idx].kp,  # type: ignore
-                self.low_cmd.motor_cmd[cmd_idx].kd,  # type: ignore
-                self.low_cmd.motor_cmd[cmd_idx].tau, # type: ignore
+                motor_cmd[cmd_idx].q,
+                motor_cmd[cmd_idx].dq,
+                motor_cmd[cmd_idx].kp,
+                motor_cmd[cmd_idx].kd,
+                motor_cmd[cmd_idx].tau,
             )
 
         for i, motor in enumerate(self.wheel_motors[:4]):
             sign = self.steering_signs[i]
-            self.low_state.motor_state[i].q = float(motor.state.get('pos', 0.0)) * sign # type: ignore
-            self.low_state.motor_state[i].dq = float(motor.state.get('vel', 0.0)) * sign # type: ignore
-            self.low_state.motor_state[i].tau_est = float(motor.state.get('tauq', 0.0)) * sign # type: ignore
+            motor_state[i].q = float(motor.state.get('pos', 0.0)) * sign
+            motor_state[i].dq = float(motor.state.get('vel', 0.0)) * sign
+            motor_state[i].tau_est = float(motor.state.get('tauq', 0.0)) * sign
 
         for i, motor in enumerate(self.wheel_motors[4:]):
             idx = 4 + i
             sign = self.drive_signs[i]
-            self.low_state.motor_state[idx].q = float(motor.state.get('pos', 0.0)) * sign # type: ignore
-            self.low_state.motor_state[idx].dq = float(motor.state.get('vel', 0.0)) * sign # type: ignore
-            self.low_state.motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0)) * sign # type: ignore
+            motor_state[idx].q = float(motor.state.get('pos', 0.0)) * sign
+            motor_state[idx].dq = float(motor.state.get('vel', 0.0)) * sign
+            motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0)) * sign
 
         for i, motor in enumerate(self.left_hand_motors):
             idx = int(LEFT_HAND_PHYSICAL_CMD_IDX[i])
-            self.low_state.motor_state[idx].q = float(motor.state.get('pos', 0.0)) # type: ignore
-            self.low_state.motor_state[idx].dq = float(motor.state.get('vel', 0.0)) # type: ignore
-            self.low_state.motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0)) # type: ignore
+            motor_state[idx].q = float(motor.state.get('pos', 0.0))
+            motor_state[idx].dq = float(motor.state.get('vel', 0.0))
+            motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0))
 
         for src_idx, dst_idx in LEFT_HAND_MIRROR_STATE_IDX.items():
-            self.low_state.motor_state[dst_idx].q = self.low_state.motor_state[src_idx].q # type: ignore
-            self.low_state.motor_state[dst_idx].dq = self.low_state.motor_state[src_idx].dq # type: ignore
-            self.low_state.motor_state[dst_idx].tau_est = self.low_state.motor_state[src_idx].tau_est # type: ignore
+            motor_state[dst_idx].q = motor_state[src_idx].q
+            motor_state[dst_idx].dq = motor_state[src_idx].dq
+            motor_state[dst_idx].tau_est = motor_state[src_idx].tau_est
 
         for i, motor in enumerate(self.right_hand_motors):
             idx = int(RIGHT_HAND_PHYSICAL_CMD_IDX[i])
-            self.low_state.motor_state[idx].q = float(motor.state.get('pos', 0.0)) # type: ignore
-            self.low_state.motor_state[idx].dq = float(motor.state.get('vel', 0.0)) # type: ignore
-            self.low_state.motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0)) # type: ignore
+            motor_state[idx].q = float(motor.state.get('pos', 0.0))
+            motor_state[idx].dq = float(motor.state.get('vel', 0.0))
+            motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0))
 
         for src_idx, dst_idx in RIGHT_HAND_MIRROR_STATE_IDX.items():
-            self.low_state.motor_state[dst_idx].q = self.low_state.motor_state[src_idx].q # type: ignore
-            self.low_state.motor_state[dst_idx].dq = self.low_state.motor_state[src_idx].dq # type: ignore
-            self.low_state.motor_state[dst_idx].tau_est = self.low_state.motor_state[src_idx].tau_est # type: ignore
+            motor_state[dst_idx].q = motor_state[src_idx].q
+            motor_state[dst_idx].dq = motor_state[src_idx].dq
+            motor_state[dst_idx].tau_est = motor_state[src_idx].tau_est
 
         self.low_state_pub.Write(self.low_state)
             

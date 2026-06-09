@@ -4,6 +4,7 @@ import xspublic
 import threading
 from collections import deque
 
+from typing import MutableSequence, cast
 from unitree_sdk2py.core.channel import ChannelPublisher, ChannelFactoryInitialize
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_
 from unitree_sdk2py.idl.default import unitree_go_msg_dds__IMUState_ as IMUState_default
@@ -46,30 +47,32 @@ class IMUNode:
             packet = self.callback_handler.get_next_packet()
 
             if packet.contains_calibrated_acc():
-                acc = packet.calibrated_acc()
-                self.state.accelerometer[0] = acc[0] # type: ignore
-                self.state.accelerometer[1] = acc[1] # type: ignore
-                self.state.accelerometer[2] = acc[2] # type: ignore
+                acc    = packet.calibrated_acc()
+                state  = cast(MutableSequence[float], self.state.accelerometer)
+                state[0] = acc[0]
+                state[1] = acc[1]
+                state[2] = acc[2]
 
             if packet.contains_calibrated_gyr():
                 gyr = packet.calibrated_gyr()
-                self.state.gyroscope[0] = gyr[0] # type: ignore
-                self.state.gyroscope[1] = gyr[1] # type: ignore
-                self.state.gyroscope[2] = gyr[2] # type: ignore
+                state  = cast(MutableSequence[float], self.state.gyroscope)
+                state[0] = gyr[0]
+                state[1] = gyr[1]
+                state[2] = gyr[2]
 
             if packet.contains_orientation():
                 quat = packet.orientation_quaternion()
-                self.state.quaternion[0] = quat[0] # type: ignore
-                self.state.quaternion[1] = quat[1] # type: ignore
-                self.state.quaternion[2] = quat[2] # type: ignore
-                self.state.quaternion[3] = quat[3] # type: ignore
-                
-                # Xsens orientation_euler() returns degrees.
-                # Unitree IMUState.rpy is consumed by EKF as radians.
+                state  = cast(MutableSequence[float], self.state.quaternion)
+                state[0] = quat.w
+                state[1] = quat.x
+                state[2] = quat.y
+                state[3] = quat.z
+
                 rpy = packet.orientation_euler()
-                self.state.rpy[0] = deg_to_rad(rpy.roll)   # type: ignore
-                self.state.rpy[1] = deg_to_rad(rpy.pitch)  # type: ignore
-                self.state.rpy[2] = deg_to_rad(rpy.yaw)    # type: ignore
+                state  = cast(MutableSequence[float], self.state.rpy)
+                state[0] = deg_to_rad(rpy.roll)
+                state[1] = deg_to_rad(rpy.pitch)
+                state[2] = deg_to_rad(rpy.yaw)
                 
             self.imu_state_pub.Write(self.state)    
     
@@ -117,8 +120,6 @@ def main():
         xspublic.XsOutputConfiguration(xspublic.MagneticField,     100),
         xspublic.XsOutputConfiguration(xspublic.Quaternion,        100),
     ]
-    
-    assert device_id.is_imu()
 
     if not device.set_output_configuration(config):
         control.close()
