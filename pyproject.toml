@@ -6,9 +6,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "cffi>=2.0.0",
-    "damiao-motor",
     "matplotlib>=3.10.8",
     "mujoco>=3.7.0",
+    "openarm-can>=1.2.9",
     "pybind11-stubgen>=2.5.5",
     "unitree-sdk2py",
     "xspublic",
@@ -16,5 +16,4 @@ dependencies = [
 
 [tool.uv.sources]
 xspublic = { git = "https://github.com/jiminghe/xspublic", subdirectory = "bindings" }
-damiao-motor = { git = "https://github.com/umeow0716/python-damiao-driver.git" }
 unitree-sdk2py = { path = "third_party/unitree_sdk2_python", editable = true }

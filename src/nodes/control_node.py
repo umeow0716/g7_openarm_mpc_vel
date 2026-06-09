@@ -1,8 +1,8 @@
 import time
 import numpy as np
+import openarm_can as oa
 
 from typing import MutableSequence, cast, TYPE_CHECKING
-from damiao_motor import DaMiaoController
 from unitree_sdk2py.core.channel import ChannelSubscriber, ChannelPublisher, ChannelFactoryInitialize
 from unitree_sdk2py.utils.thread import RecurrentThread
 from unitree_sdk2py.idl.unitree_go.msg.dds_ import IMUState_
@@ -14,9 +14,7 @@ from unitree_sdk2py.idl.default import \
 
 from .actuator_mapping import (
     LEFT_HAND_PHYSICAL_CMD_IDX,
-    LEFT_HAND_MIRROR_STATE_IDX,
     RIGHT_HAND_PHYSICAL_CMD_IDX,
-    RIGHT_HAND_MIRROR_STATE_IDX,
 )
 
 if TYPE_CHECKING:
@@ -56,54 +54,48 @@ class ControlNode:
         self.low_cmd   = LowCmd_default()
         self.low_state = LowState_default()
         
-        self.wheel_controller = DaMiaoController(channel="can0", bustype="socketcan", fd=True)
-        self.wheel_motors = [
-            self.wheel_controller.add_motor(motor_id=0x01, feedback_id=0x11, motor_type="8009"),
-            self.wheel_controller.add_motor(motor_id=0x02, feedback_id=0x12, motor_type="8009"),
-            self.wheel_controller.add_motor(motor_id=0x03, feedback_id=0x13, motor_type="8009"),
-            self.wheel_controller.add_motor(motor_id=0x04, feedback_id=0x14, motor_type="8009"),
-            self.wheel_controller.add_motor(motor_id=0x05, feedback_id=0x15, motor_type="6006"),
-            self.wheel_controller.add_motor(motor_id=0x06, feedback_id=0x16, motor_type="6006"),
-            self.wheel_controller.add_motor(motor_id=0x07, feedback_id=0x17, motor_type="6006"),
-            self.wheel_controller.add_motor(motor_id=0x08, feedback_id=0x18, motor_type="6006"),
+        self.wheel_controller = oa.OpenArm('can0', True)
+        self.wheel_motor_types = [
+            oa.MotorType.DM8009, oa.MotorType.DM8009, oa.MotorType.DM8009, oa.MotorType.DM8009,
+            oa.MotorType.DM6006, oa.MotorType.DM6006, oa.MotorType.DM6006, oa.MotorType.DM6006,
         ]
+        self.wheel_send_ids = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+        self.wheel_recv_ids = [0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]
+        self.wheel_control_modes = [oa.ControlMode.POS_VEL] * 4 + [oa.ControlMode.MIT] * 4
+        self.wheel_controller.init_arm_motors(self.wheel_motor_types, self.wheel_send_ids, self.wheel_recv_ids, self.wheel_control_modes)
         
-        self.left_hand_controller = DaMiaoController(channel="can1", bustype="socketcan", fd=True)
-        self.left_hand_motors = [
-            self.left_hand_controller.add_motor(motor_id=0x01, feedback_id=0x11, motor_type="8009"),
-            self.left_hand_controller.add_motor(motor_id=0x02, feedback_id=0x12, motor_type="8009"),
-            self.left_hand_controller.add_motor(motor_id=0x03, feedback_id=0x13, motor_type="4340"),
-            self.left_hand_controller.add_motor(motor_id=0x04, feedback_id=0x14, motor_type="4340"),
-            self.left_hand_controller.add_motor(motor_id=0x05, feedback_id=0x15, motor_type="4310"),
-            self.left_hand_controller.add_motor(motor_id=0x06, feedback_id=0x16, motor_type="4310"),
-            self.left_hand_controller.add_motor(motor_id=0x07, feedback_id=0x17, motor_type="4310"),
-            self.left_hand_controller.add_motor(motor_id=0x08, feedback_id=0x18, motor_type="4310"),
+        self.left_hand_controller = oa.OpenArm('can1', True)
+        self.left_hand_motor_types = [
+            oa.MotorType.DM8009, oa.MotorType.DM8009, oa.MotorType.DM4340, oa.MotorType.DM4340,
+            oa.MotorType.DM4310, oa.MotorType.DM4310, oa.MotorType.DM4310, oa.MotorType.DM4310,
         ]
+        self.left_hand_send_ids = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+        self.left_hand_recv_ids = [0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]
+        self.left_hand_control_modes = [oa.ControlMode.MIT] * 8
+        self.left_hand_controller.init_arm_motors(self.left_hand_motor_types, self.left_hand_send_ids, self.left_hand_recv_ids, self.left_hand_control_modes)
         
-        self.right_hand_controller = DaMiaoController(channel="can2", bustype="socketcan", fd=True)
-        self.right_hand_motors = [
-            self.right_hand_controller.add_motor(motor_id=0x01, feedback_id=0x11, motor_type="8009"),
-            self.right_hand_controller.add_motor(motor_id=0x02, feedback_id=0x12, motor_type="8009"),
-            self.right_hand_controller.add_motor(motor_id=0x03, feedback_id=0x13, motor_type="4340"),
-            self.right_hand_controller.add_motor(motor_id=0x04, feedback_id=0x14, motor_type="4340"),
-            self.right_hand_controller.add_motor(motor_id=0x05, feedback_id=0x15, motor_type="4310"),
-            self.right_hand_controller.add_motor(motor_id=0x06, feedback_id=0x16, motor_type="4310"),
-            self.right_hand_controller.add_motor(motor_id=0x07, feedback_id=0x17, motor_type="4310"),
-            self.right_hand_controller.add_motor(motor_id=0x08, feedback_id=0x18, motor_type="4310"),
+        self.right_hand_controller = oa.OpenArm('can2', True)
+        self.right_hand_motor_types = [
+            oa.MotorType.DM8009, oa.MotorType.DM8009, oa.MotorType.DM4340, oa.MotorType.DM4340,
+            oa.MotorType.DM4310, oa.MotorType.DM4310, oa.MotorType.DM4310, oa.MotorType.DM4310,
         ]
+        self.right_hand_send_ids = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+        self.right_hand_recv_ids = [0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]
+        self.right_hand_control_modes = [oa.ControlMode.MIT] * 8
+        self.right_hand_controller.init_arm_motors(self.right_hand_motor_types, self.right_hand_send_ids, self.right_hand_recv_ids, self.right_hand_control_modes)
         
         self.wheel_controller.enable_all()
         self.left_hand_controller.enable_all()
         self.right_hand_controller.enable_all()
         time.sleep(0.1)
-        for motor in self.wheel_motors[:4]:
-            motor.ensure_control_mode("POSVEL")
-        for motor in self.wheel_motors[4:]:
-            motor.ensure_control_mode("VEL")
-        for motor in self.left_hand_motors + self.right_hand_motors:
-            motor.ensure_control_mode("MIT")
+        self.wheel_controller.recv_all()
+        self.left_hand_controller.recv_all()
+        self.right_hand_controller.recv_all()
         time.sleep(0.1)
-        
+        self.wheel_controller.set_callback_mode_all(oa.CallbackMode.STATE)
+        self.left_hand_controller.set_callback_mode_all(oa.CallbackMode.STATE)
+        self.right_hand_controller.set_callback_mode_all(oa.CallbackMode.STATE)
+
         self.steering_signs = np.array([1.0, -1.0, 1.0, -1.0], dtype=np.float64)
         self.drive_signs = np.array([-1.0, -1.0, -1.0, -1.0], dtype=np.float64)
         
@@ -135,9 +127,9 @@ class ControlNode:
         )
         wheel_is_stopped = np.isclose(wheel_cmd_dq, 0.0)
 
-        for i, motor in enumerate(self.wheel_motors[:4]):
+        for i, motor in enumerate(self.wheel_controller.get_arm().get_motors()[:4]):
             if wheel_is_stopped[i]:
-                steer_target_raw = float(motor.state.get('pos', 0.0))
+                steer_target_raw = motor.get_position()
                 steer_vel = STEERING_HOLD_VEL
             else:
                 steer_target_raw = (
@@ -145,60 +137,65 @@ class ControlNode:
                 )
                 steer_vel = STEERING_MOVE_VEL
 
-            motor.send_cmd_pos_vel(
-                steer_target_raw,
-                steer_vel,
+            param = oa.PosVelParam(
+                q=steer_target_raw,
+                dq=steer_vel
             )
+            self.wheel_controller.get_arm().posvel_control_one(i, param)
 
-        for i, motor in enumerate(self.wheel_motors[4:]):
-            motor.send_cmd_vel(
-                wheel_cmd_dq[i] * self.drive_signs[i]
+        for i, motor in enumerate(self.wheel_controller.get_arm().get_motors()[4:]):
+            param = oa.MITParam(
+                q=0.0,
+                dq=wheel_cmd_dq[i] * self.drive_signs[i],
+                kp=0.0,
+                kd=2.0,
+                tau=0.0,
             )
+            self.wheel_controller.get_arm().mit_control_one(i + 4, param)
 
-        for i, motor in enumerate(self.left_hand_motors):
+        for i, motor in enumerate(self.left_hand_controller.get_arm().get_motors()):
             cmd_idx = int(LEFT_HAND_PHYSICAL_CMD_IDX[i])
-            motor.send_cmd_mit(
-                motor_cmd[cmd_idx].q,
-                motor_cmd[cmd_idx].dq,
-                motor_cmd[cmd_idx].kp,
-                motor_cmd[cmd_idx].kd,
-                motor_cmd[cmd_idx].tau,
+            param = oa.MITParam(
+                q=motor_cmd[cmd_idx].q,
+                dq=motor_cmd[cmd_idx].dq,
+                kp=motor_cmd[cmd_idx].kp,
+                kd=motor_cmd[cmd_idx].kd,
+                tau=motor_cmd[cmd_idx].tau,
             )
-
-        for i, motor in enumerate(self.wheel_motors[:4]):
+            self.left_hand_controller.get_arm().mit_control_one(i, param)
+        
+        self.wheel_controller.refresh_all()
+        self.left_hand_controller.refresh_all()
+        self.right_hand_controller.refresh_all()
+        time.sleep(0.0015)
+        self.wheel_controller.recv_all()
+        self.left_hand_controller.recv_all()
+        self.right_hand_controller.recv_all()
+                
+        for i, motor in enumerate(self.wheel_controller.get_arm().get_motors()[:4]):
             sign = self.steering_signs[i]
-            motor_state[i].q = float(motor.state.get('pos', 0.0)) * sign
-            motor_state[i].dq = float(motor.state.get('vel', 0.0)) * sign
-            motor_state[i].tau_est = float(motor.state.get('tauq', 0.0)) * sign
+            motor_state[i].q = float(motor.get_position()) * sign
+            motor_state[i].dq = float(motor.get_velocity()) * sign
+            motor_state[i].tau_est = float(motor.get_torque()) * sign
 
-        for i, motor in enumerate(self.wheel_motors[4:]):
+        for i, motor in enumerate(self.wheel_controller.get_arm().get_motors()[4:]):
             idx = 4 + i
             sign = self.drive_signs[i]
-            motor_state[idx].q = float(motor.state.get('pos', 0.0)) * sign
-            motor_state[idx].dq = float(motor.state.get('vel', 0.0)) * sign
-            motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0)) * sign
+            motor_state[idx].q = float(motor.get_position()) * sign
+            motor_state[idx].dq = float(motor.get_velocity()) * sign
+            motor_state[idx].tau_est = float(motor.get_torque()) * sign
 
-        for i, motor in enumerate(self.left_hand_motors):
+        for i, motor in enumerate(self.left_hand_controller.get_arm().get_motors()):
             idx = int(LEFT_HAND_PHYSICAL_CMD_IDX[i])
-            motor_state[idx].q = float(motor.state.get('pos', 0.0))
-            motor_state[idx].dq = float(motor.state.get('vel', 0.0))
-            motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0))
+            motor_state[idx].q = float(motor.get_position())
+            motor_state[idx].dq = float(motor.get_velocity())
+            motor_state[idx].tau_est = float(motor.get_torque())
 
-        for src_idx, dst_idx in LEFT_HAND_MIRROR_STATE_IDX.items():
-            motor_state[dst_idx].q = motor_state[src_idx].q
-            motor_state[dst_idx].dq = motor_state[src_idx].dq
-            motor_state[dst_idx].tau_est = motor_state[src_idx].tau_est
-
-        for i, motor in enumerate(self.right_hand_motors):
+        for i, motor in enumerate(self.right_hand_controller.get_arm().get_motors()):
             idx = int(RIGHT_HAND_PHYSICAL_CMD_IDX[i])
-            motor_state[idx].q = float(motor.state.get('pos', 0.0))
-            motor_state[idx].dq = float(motor.state.get('vel', 0.0))
-            motor_state[idx].tau_est = float(motor.state.get('tauq', 0.0))
-
-        for src_idx, dst_idx in RIGHT_HAND_MIRROR_STATE_IDX.items():
-            motor_state[dst_idx].q = motor_state[src_idx].q
-            motor_state[dst_idx].dq = motor_state[src_idx].dq
-            motor_state[dst_idx].tau_est = motor_state[src_idx].tau_est
+            motor_state[idx].q = float(motor.get_position())
+            motor_state[idx].dq = float(motor.get_velocity())
+            motor_state[idx].tau_est = float(motor.get_torque())
 
         self.low_state_pub.Write(self.low_state)
             
